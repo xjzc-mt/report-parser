@@ -28,5 +28,6 @@ build/
 .cache/
 .parcel-cache/
 
-# PDF extraction results
+# PDF/Excel extraction results
 web/extraction_results_*.csv
+extraction_results_*.xlsx

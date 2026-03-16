@@ -140,9 +140,139 @@ header h1 {
   animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+/* Methodology Panel */
+.methodology-panel {
+  animation: slideUp 0.6s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  cursor: default;
+}
+
+.methodology-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 1.125rem;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-primary);
+  list-style: none;
+  user-select: none;
+  padding: 0.25rem 0;
+}
+
+.methodology-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.toggle-arrow {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  transition: transform 0.3s ease;
+}
+
+details.methodology-panel[open] .toggle-arrow {
+  transform: rotate(90deg);
+}
+
+.methodology-content {
+  margin-top: 1.5rem;
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.methodology-content h3 {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--primary-accent);
+  margin: 1.75rem 0 0.75rem;
+}
+
+.methodology-content h3:first-child {
+  margin-top: 0;
+}
+
+.methodology-content h4 {
+  font-size: 0.925rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin: 1rem 0 0.5rem;
+}
+
+.methodology-content p {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  margin-bottom: 0.75rem;
+}
+
+.methodology-content ul {
+  padding-left: 1.25rem;
+  margin-bottom: 1rem;
+}
+
+.methodology-content li {
+  font-size: 0.9rem;
+  color: var(--text-secondary);
+  line-height: 1.7;
+  margin-bottom: 0.25rem;
+}
+
+.methodology-content code {
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.825rem;
+  font-family: 'SF Mono', 'Fira Code', monospace;
+}
+
+.methodology-content table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+
+.methodology-content th,
+.methodology-content td {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: left;
+}
+
+.methodology-content th {
+  background: rgba(59, 130, 246, 0.1);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: nowrap;
+}
+
+.methodology-content td {
+  color: var(--text-secondary);
+}
+
+.methodology-content strong {
+  color: var(--text-primary);
+}
+
 @keyframes slideUp {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 768px) {
+  .container {
+    padding: 1.5rem 1rem;
+  }
+  .glass-panel {
+    padding: 1.5rem 1rem;
+  }
+  header h1 {
+    font-size: 1.75rem;
+  }
 }
 
 /* Typography & Icons */
@@ -163,7 +293,7 @@ h2 {
 /* Form Styles */
 .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 1.5rem;
 }
 
@@ -204,7 +334,7 @@ input::placeholder {
 /* Upload Sections */
 .upload-section {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 1.5rem;
 }
 
@@ -248,6 +378,41 @@ input::placeholder {
   font-size: 0.875rem;
   color: var(--text-secondary);
   margin-bottom: 0.5rem;
+}
+
+.type-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.25rem;
+}
+
+.type-selector label {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.type-selector select {
+  background: rgba(15, 23, 42, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: var(--text-primary);
+  font-family: var(--font-family);
+  font-size: 0.85rem;
+  padding: 0.4rem 0.6rem;
+  border-radius: var(--border-radius-md);
+  outline: none;
+  cursor: pointer;
+  transition: var(--transition-normal);
+}
+
+.type-selector select:focus {
+  border-color: var(--primary-accent);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+}
+
+.type-selector select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 .file-input {
@@ -414,6 +579,32 @@ button {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 1rem;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.results-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.filter-toggle input[type="checkbox"] {
+  accent-color: var(--primary-accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
 }
 
 .table-container {
@@ -458,7 +649,7 @@ td {
 }
 
 td:nth-child(2), td:nth-child(3) {
-  min-width: 250px;
+  min-width: 150px;
 }
 
 td:last-child {
