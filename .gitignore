@@ -1,0 +1,32 @@
+# OS files
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# IDE files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# User data & samples
+sample/
+temp/
+out/
+*.log
+
+# Sensitive information
+.env
+*.pem
+*.key
+
+# Web specific (if node is added later)
+node_modules/
+dist/
+build/
+.cache/
+.parcel-cache/
+
+# PDF extraction results
+web/extraction_results_*.csv
