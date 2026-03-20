@@ -303,13 +303,18 @@ h2 {
   gap: 0.5rem;
 }
 
+.input-group-wide {
+  grid-column: 1 / -1;
+}
+
 label {
   font-size: 0.875rem;
   font-weight: 500;
   color: var(--text-secondary);
 }
 
-input {
+input:not([type="checkbox"]),
+select {
   background: rgba(15, 23, 42, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
@@ -321,14 +326,24 @@ input {
   outline: none;
 }
 
-input:focus {
+input:not([type="checkbox"]):focus,
+select:focus {
   border-color: var(--primary-accent);
   box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.2);
   background: rgba(15, 23, 42, 0.8);
 }
 
-input::placeholder {
+input:not([type="checkbox"])::placeholder {
   color: rgba(148, 163, 184, 0.5);
+}
+
+select {
+  cursor: pointer;
+}
+
+select option {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
 }
 
 /* Upload Sections */
@@ -601,6 +616,38 @@ button {
 }
 
 .filter-toggle input[type="checkbox"] {
+  accent-color: var(--primary-accent);
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+}
+
+.checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.checkbox-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--border-radius-md);
+  background: rgba(15, 23, 42, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: var(--transition-normal);
+  user-select: none;
+}
+
+.checkbox-chip:hover {
+  border-color: rgba(59, 130, 246, 0.5);
+  background: rgba(15, 23, 42, 0.75);
+}
+
+.checkbox-chip input[type="checkbox"] {
   accent-color: var(--primary-accent);
   width: 16px;
   height: 16px;

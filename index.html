@@ -74,9 +74,10 @@
           <tbody>
             <tr><td><code>indicator_code</code></td><td>字符串</td><td>指标代码（支持 leading zero）</td></tr>
             <tr><td><code>indicator_name</code></td><td>字符串</td><td>指标名称</td></tr>
-            <tr><td><code>indicator_type</code></td><td>字符串</td><td>文本型/文字型 / 数值型 / 强度型</td></tr>
+            <tr><td><code>value_type</code></td><td>字符串</td><td>文字型 / 数值型 / 强度型 / 货币型</td></tr>
             <tr><td><code>definition</code></td><td>字符串</td><td>指标定义</td></tr>
             <tr><td><code>guidance</code></td><td>可选</td><td>补充指引</td></tr>
+            <tr><td><code>prompt</code></td><td>可选</td><td>每个指标的额外提取说明</td></tr>
           </tbody>
         </table>
 
@@ -86,12 +87,15 @@
           <tbody>
             <tr><td><code>indicator_code</code></td><td>全部</td><td>指标代码</td></tr>
             <tr><td><code>indicator_name</code></td><td>全部</td><td>指标名称</td></tr>
-            <tr><td><code>indicator_type</code></td><td>全部</td><td>文本型 / 数值型 / 强度型</td></tr>
+            <tr><td><code>value_type</code></td><td>全部</td><td>文字型 / 数值型 / 强度型 / 货币型</td></tr>
             <tr><td><code>year</code></td><td>全部</td><td>年份（多年份数据自动拆分为多行）</td></tr>
-            <tr><td><code>text_value</code></td><td>文本型</td><td>提取的文本结果</td></tr>
-            <tr><td><code>num_value</code></td><td>数值 / 强度</td><td>提取的数值</td></tr>
-            <tr><td><code>unit</code></td><td>数值 / 强度</td><td>数值的单位</td></tr>
-            <tr><td><code>page_number</code></td><td>全部</td><td>PDF 物理页码（非内容页码）</td></tr>
+            <tr><td><code>text_value</code></td><td>文字型</td><td>提取的文本结果</td></tr>
+            <tr><td><code>num_value</code></td><td>数值 / 强度 / 货币</td><td>提取的数值</td></tr>
+            <tr><td><code>unit</code></td><td>数值 / 强度 / 货币</td><td>数值的单位或组合单位</td></tr>
+            <tr><td><code>currency</code></td><td>货币型</td><td>币种代码或符号</td></tr>
+            <tr><td><code>numerator_unit</code></td><td>强度型</td><td>分子单位</td></tr>
+            <tr><td><code>denominator_unit</code></td><td>强度型</td><td>分母单位</td></tr>
+            <tr><td><code>pdf_numbers</code></td><td>全部</td><td>PDF 物理页码（非内容页码，可为多个页码）</td></tr>
           </tbody>
         </table>
         <p><strong>导出规则</strong>：未找到结果的指标不包含在输出文件中。</p>
@@ -100,12 +104,15 @@
         <table>
           <thead><tr><th>组别</th><th>包含类型</th><th>每批上限</th><th>原因</th></tr></thead>
           <tbody>
-            <tr><td>文本组</td><td>文本型</td><td>100 个</td><td>文本返回较长</td></tr>
-            <tr><td>数值组</td><td>数值型 + 强度型</td><td>200 个</td><td>数值返回简短</td></tr>
+            <tr><td>文字组</td><td>文字型</td><td>可配置（40 / 50 / 100）</td><td>文本返回较长</td></tr>
+            <tr><td>数值组</td><td>数值型</td><td>可配置（40 / 50 / 100）</td><td>数值返回简短</td></tr>
+            <tr><td>强度组</td><td>强度型</td><td>可配置（40 / 50 / 100）</td><td>需要拆分分子/分母单位</td></tr>
+            <tr><td>货币组</td><td>货币型</td><td>可配置（40 / 50 / 100）</td><td>需要额外提取币种</td></tr>
           </tbody>
         </table>
         <ul>
           <li>每个批次<strong>仅含同一类型</strong>的指标</li>
+          <li>可按<strong>文字型 / 数值型 / 强度型 / 货币型</strong>多选需要处理的指标类型</li>
           <li>多年份数据自动拆分为独立行</li>
           <li>失败批次最多重试 <strong>3 次</strong>（指数退避：1s → 2s → 4s）</li>
         </ul>
@@ -131,7 +138,7 @@
     <div class="glass-panel main-panel">
       
       <!-- API Configuration -->
-      <section class="config-section hidden">
+      <section class="config-section">
         <h2><span class="icon">⚙️</span> API Configuration</h2>
         <div class="form-grid">
           <div class="input-group">
@@ -139,12 +146,48 @@
             <input type="text" id="apiUrl" value="https://generativelanguage.googleapis.com/v1beta" placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off">
           </div>
           <div class="input-group">
-            <label for="apiKey">API Key</label>
-            <input type="password" id="apiKey" placeholder="sk-..." autocomplete="off">
+            <label for="modelName">Model Name</label>
+            <select id="modelName">
+              <option value="gemini-2.5-pro" selected>Gemini 2.5 Pro</option>
+              <option value="gemini-3-pro-preview">Gemini 3 Pro Preview</option>
+            </select>
           </div>
           <div class="input-group">
-            <label for="modelName">Model Name</label>
-            <input type="text" id="modelName" value="gemini-2.5-pro" placeholder="gpt-4o, deepseek-chat, gemini-1.5-pro..." autocomplete="off">
+            <label for="batchSize">Batch Size</label>
+            <select id="batchSize">
+              <option value="40" selected>40</option>
+              <option value="50">50</option>
+              <option value="100">100</option>
+            </select>
+          </div>
+          <div class="input-group">
+            <label for="maxConcurrency">Max Concurrency</label>
+            <select id="maxConcurrency">
+              <option value="1">1</option>
+              <option value="2" selected>2</option>
+              <option value="5">5</option>
+            </select>
+          </div>
+          <div class="input-group input-group-wide">
+            <label>Indicator Types To Process</label>
+            <div class="checkbox-group">
+              <label class="checkbox-chip" for="indicatorTypeText">
+                <input type="checkbox" id="indicatorTypeText" name="indicatorTypes" value="文字型">
+                <span>文字型</span>
+              </label>
+              <label class="checkbox-chip" for="indicatorTypeNumeric">
+                <input type="checkbox" id="indicatorTypeNumeric" name="indicatorTypes" value="数值型" checked>
+                <span>数值型</span>
+              </label>
+              <label class="checkbox-chip" for="indicatorTypeCurrency">
+                <input type="checkbox" id="indicatorTypeCurrency" name="indicatorTypes" value="货币型" checked>
+                <span>货币型</span>
+              </label>
+              <label class="checkbox-chip" for="indicatorTypeIntensity">
+                <input type="checkbox" id="indicatorTypeIntensity" name="indicatorTypes" value="强度型" checked>
+                <span>强度型</span>
+              </label>
+            </div>
           </div>
         </div>
       </section>
@@ -163,7 +206,7 @@
         <div class="upload-card" id="csvDropZone">
           <div class="upload-icon">📊</div>
           <h3>Upload Requirements Excel</h3>
-          <p class="upload-hint">Contains: indicator_code, indicator_name, indicator_type, definition</p>
+          <p class="upload-hint">Contains: value_type, indicator_code, indicator_name, definition, guidance, prompt</p>
           <input type="file" id="csvFileInput" accept=".xlsx,.xls" class="file-input">
           <button class="btn-outline" onclick="document.getElementById('csvFileInput').click()">Browse Excel</button>
           <div id="csvFileInfo" class="file-info hidden"></div>
