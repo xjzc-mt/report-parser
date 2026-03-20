@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useMemo, useRef, useState } from 'react';
 import { Header } from './components/Header.jsx';
 import { ExtractorTab } from './components/ExtractorTab.jsx';
 import { MethodologyTab } from './components/MethodologyTab.jsx';
@@ -6,6 +6,10 @@ import { DEFAULT_SETTINGS } from './constants/extraction.js';
 import { exportResultsToExcel } from './services/exportService.js';
 import { resolveApiKey, runExtractionJob } from './services/extractionService.js';
 import { getSelectedIndicatorTypes, isResultFound } from './utils/extraction.js';
+
+const CompressorTab = lazy(() => import('./components/CompressorTab.jsx').then((module) => ({
+  default: module.CompressorTab
+})));
 
 function createInitialProgress() {
   return {
@@ -27,10 +31,14 @@ function validateRequirementsFile(file) {
   return name.endsWith('.xlsx') || name.endsWith('.xls') || name.endsWith('.csv');
 }
 
+function getFileIdentity(file) {
+  return `${file.name}__${file.size}__${file.lastModified}`;
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState('extract');
   const [settings, setSettings] = useState(DEFAULT_SETTINGS);
-  const [pdfFile, setPdfFile] = useState(null);
+  const [pdfFiles, setPdfFiles] = useState([]);
   const [requirementsFile, setRequirementsFile] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(createInitialProgress);
@@ -50,7 +58,7 @@ export default function App() {
   );
 
   const canStart = Boolean(
-    pdfFile && requirementsFile && apiKey && settings.modelName.trim() && selectedIndicatorTypes.length > 0
+    pdfFiles.length > 0 && requirementsFile && apiKey && settings.modelName.trim() && selectedIndicatorTypes.length > 0
   );
 
   const appendProgress = ({ message, percentage, timestamp }) => {
@@ -87,12 +95,39 @@ export default function App() {
     });
   };
 
-  const handlePdfSelect = (file) => {
-    if (!validatePdfFile(file)) {
-      window.alert('Please upload a valid PDF file.');
+  const handlePdfSelect = (files) => {
+    const nextFiles = Array.isArray(files) ? files : [files].filter(Boolean);
+
+    if (nextFiles.length === 0) {
       return;
     }
-    setPdfFile(file);
+
+    const invalidFile = nextFiles.find((file) => !validatePdfFile(file));
+
+    if (invalidFile) {
+      window.alert(`Please upload valid PDF files only. Invalid file: ${invalidFile.name}`);
+      return;
+    }
+
+    setPdfFiles((previous) => {
+      const merged = [...previous];
+      const seen = new Set(previous.map(getFileIdentity));
+
+      nextFiles.forEach((file) => {
+        const identity = getFileIdentity(file);
+        if (!seen.has(identity)) {
+          merged.push(file);
+          seen.add(identity);
+        }
+      });
+
+      return merged;
+    });
+  };
+
+  const handlePdfRemove = (fileToRemove) => {
+    const identity = getFileIdentity(fileToRemove);
+    setPdfFiles((previous) => previous.filter((file) => getFileIdentity(file) !== identity));
   };
 
   const handleRequirementsSelect = (file) => {
@@ -118,20 +153,122 @@ export default function App() {
     });
 
     try {
-      const response = await runExtractionJob({
-        pdfFile,
-        csvFile: requirementsFile,
-        settings: {
-          ...settings,
-          indicatorTypes: selectedIndicatorTypes,
-          apiKey
-        },
-        onProgress: appendProgress,
-        onPartialResults: setResults
-      });
+      const totalFiles = pdfFiles.length;
+      const startedAt = new Date();
+      let aggregatedResults = [];
+      let aggregatedStats = {
+        model: settings.modelName.trim(),
+        selectedTypes: selectedIndicatorTypes.join(', '),
+        startTime: startedAt.toLocaleString(),
+        endTime: '',
+        duration: '',
+        totalFiles,
+        totalInputIndicators: 0,
+        totalIndicators: 0,
+        textCount: 0,
+        numericCount: 0,
+        intensityCount: 0,
+        currencyCount: 0,
+        totalBatches: 0,
+        textBatches: 0,
+        numericBatches: 0,
+        intensityBatches: 0,
+        currencyBatches: 0,
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCost: 0,
+        failedFiles: 0
+      };
 
-      setResults(response.results);
-      setStats(response.stats);
+      const enrichResultsWithFile = (items, fileName) => (
+        (items || []).map((item) => ({
+          source_file: fileName,
+          ...item
+        }))
+      );
+
+      const sumStatKeys = [
+        'totalInputIndicators',
+        'totalIndicators',
+        'textCount',
+        'numericCount',
+        'intensityCount',
+        'currencyCount',
+        'totalBatches',
+        'textBatches',
+        'numericBatches',
+        'intensityBatches',
+        'currencyBatches',
+        'totalInputTokens',
+        'totalOutputTokens',
+        'totalCost'
+      ];
+
+      for (let index = 0; index < pdfFiles.length; index += 1) {
+        const pdfFile = pdfFiles[index];
+
+        appendProgress({
+          message: `Preparing file ${index + 1}/${totalFiles}: ${pdfFile.name}`,
+          percentage: Math.round((index / totalFiles) * 100),
+          timestamp: new Date().toLocaleTimeString()
+        });
+
+        try {
+          const response = await runExtractionJob({
+            pdfFile,
+            csvFile: requirementsFile,
+            settings: {
+              ...settings,
+              indicatorTypes: selectedIndicatorTypes,
+              apiKey
+            },
+            onProgress: ({ message, percentage, timestamp }) => {
+              const globalPercentage = percentage >= 0
+                ? Math.min(100, Math.round(((index + (percentage / 100)) / totalFiles) * 100))
+                : -1;
+
+              appendProgress({
+                message: `[${index + 1}/${totalFiles}] ${pdfFile.name}: ${message}`,
+                percentage: globalPercentage,
+                timestamp
+              });
+            },
+            onPartialResults: (partialResults) => {
+              setResults([
+                ...aggregatedResults,
+                ...enrichResultsWithFile(partialResults, pdfFile.name)
+              ]);
+            }
+          });
+
+          const fileResults = enrichResultsWithFile(response.results, pdfFile.name);
+          aggregatedResults = [...aggregatedResults, ...fileResults];
+          setResults(aggregatedResults);
+
+          sumStatKeys.forEach((key) => {
+            aggregatedStats[key] += Number(response.stats[key] || 0);
+          });
+        } catch (error) {
+          aggregatedStats.failedFiles += 1;
+          appendProgress({
+            message: `[${index + 1}/${totalFiles}] ${pdfFile.name}: failed - ${error.message}`,
+            percentage: Math.round(((index + 1) / totalFiles) * 100),
+            timestamp: new Date().toLocaleTimeString()
+          });
+        }
+      }
+
+      const endedAt = new Date();
+      const durationMs = endedAt - startedAt;
+
+      aggregatedStats = {
+        ...aggregatedStats,
+        endTime: endedAt.toLocaleString(),
+        duration: `${Math.floor(durationMs / 60000)}m ${Math.floor((durationMs % 60000) / 1000)}s`
+      };
+
+      setResults(aggregatedResults);
+      setStats(aggregatedStats);
       resultsAnchorRef.current?.scrollIntoView({ behavior: 'smooth' });
     } catch (error) {
       console.error(error);
@@ -167,9 +304,10 @@ export default function App() {
           canStart={canStart}
           hasApiKey={Boolean(apiKey)}
           isRunning={isRunning}
-          pdfFile={pdfFile}
+          pdfFiles={pdfFiles}
           requirementsFile={requirementsFile}
           onSelectPdf={handlePdfSelect}
+          onRemovePdf={handlePdfRemove}
           onSelectRequirements={handleRequirementsSelect}
           onStart={handleStart}
           progress={progress}
@@ -185,6 +323,10 @@ export default function App() {
           onChangeSetting={handleSettingChange}
           onIndicatorTypeToggle={handleIndicatorTypeToggle}
         />
+      ) : activeTab === 'compress' ? (
+        <Suspense fallback={<section className="glass-panel main-panel"><p className="section-caption">正在加载 PDF 压缩器...</p></section>}>
+          <CompressorTab />
+        </Suspense>
       ) : (
         <MethodologyTab />
       )}

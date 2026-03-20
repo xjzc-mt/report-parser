@@ -16,6 +16,10 @@ import {
 } from '../constants/extraction.js';
 
 function formatPdfInfo(file) {
+  if (Array.isArray(file)) {
+    const totalSizeMb = file.reduce((sum, item) => sum + item.size, 0) / 1024 / 1024;
+    return `${file.length} PDFs selected (${totalSizeMb.toFixed(2)} MB)`;
+  }
   return `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
 }
 
@@ -53,9 +57,10 @@ export function ExtractorTab({
   canStart,
   hasApiKey,
   isRunning,
-  pdfFile,
+  pdfFiles,
   requirementsFile,
   onSelectPdf,
+  onRemovePdf,
   onSelectRequirements,
   onStart,
   progress,
@@ -70,7 +75,7 @@ export function ExtractorTab({
   onIndicatorTypeToggle
 }) {
   const readinessItems = [
-    { label: 'PDF 报告', ready: Boolean(pdfFile) },
+    { label: 'PDF 报告', ready: pdfFiles.length > 0 },
     { label: '需求清单', ready: Boolean(requirementsFile) },
     { label: '.env API Key', ready: hasApiKey },
     { label: '指标类型', ready: settings.indicatorTypes.length > 0 }
@@ -158,13 +163,15 @@ export function ExtractorTab({
             <UploadCard
               icon={<IconFileTypePdf size={26} stroke={1.8} />}
               tag="PDF"
-              title="Upload PDF"
-              hint="The source document to extract data from"
-              acceptHint="支持 PDF，建议使用文本可选中的报告文件"
-              buttonLabel="Browse PDF"
+              title="Upload PDFs"
+              hint="Upload one or more source reports to process sequentially"
+              acceptHint="支持多篇 PDF，系统会按顺序逐篇提取"
+              buttonLabel="Browse PDFs"
               accept="application/pdf"
-              file={pdfFile}
+              file={pdfFiles}
+              multiple
               onFileSelect={onSelectPdf}
+              onRemoveFile={onRemovePdf}
               formatFileInfo={formatPdfInfo}
             />
             <UploadCard

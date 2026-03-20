@@ -15,10 +15,11 @@ export const DEFAULT_SETTINGS = {
   modelName: 'gemini-2.5-pro',
   batchSize: 40,
   maxConcurrency: 2,
-  indicatorTypes: ['数值型', '货币型', '强度型']
+  indicatorTypes: [...PROCESSABLE_VALUE_TYPES]
 };
 
 export const RESULTS_COLUMNS = [
+  { key: 'source_file', label: 'Source File' },
   { key: 'indicator_code', label: 'Indicator Code' },
   { key: 'indicator_name', label: 'Indicator Name' },
   { key: 'value_type', label: 'Value Type' },

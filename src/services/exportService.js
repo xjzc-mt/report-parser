@@ -25,6 +25,7 @@ export async function exportResultsToExcel(results, extractionStats) {
     ['', ''],
     ['Model', extractionStats.model || 'N/A'],
     ['Selected Types', extractionStats.selectedTypes || 'N/A'],
+    ['PDF Files', extractionStats.totalFiles || 0],
     ['Start Time', extractionStats.startTime || 'N/A'],
     ['End Time', extractionStats.endTime || 'N/A'],
     ['Total Duration', extractionStats.duration || 'N/A'],

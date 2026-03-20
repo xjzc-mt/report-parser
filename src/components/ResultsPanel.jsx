@@ -10,6 +10,10 @@ function getCellValue(item, key) {
 function renderCellContent(item, key) {
   const value = getCellValue(item, key);
 
+  if (key === 'source_file') {
+    return <span className="cell-file">{value || '—'}</span>;
+  }
+
   if (key === 'value_type') {
     return (
       <Badge variant="light" color="blue" radius="xl" className="value-type-badge">
@@ -113,7 +117,7 @@ export function ResultsPanel({ results, displayedResults, filterOnlyFound, onTog
             </thead>
             <tbody>
               {displayedResults.map((item, index) => (
-                <tr key={`${item.indicator_code}-${item.year || 'na'}-${index}`}>
+                <tr key={`${item.source_file || 'unknown'}-${item.indicator_code}-${item.year || 'na'}-${index}`}>
                   {RESULTS_COLUMNS.map((column) => (
                     <td key={column.key}>{renderCellContent(item, column.key)}</td>
                   ))}

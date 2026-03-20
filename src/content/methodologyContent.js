@@ -10,6 +10,7 @@ export const methodologyContent = {
   },
   inputSpec: {
     pdf: [
+      '支持一次上传多篇 PDF，系统会按顺序逐篇运行并在结果中标记来源文件名',
       'Gemini 模式：PDF 转 Base64 后直接发送（原生文档理解）',
       'OpenAI 模式：pdf.js 本地逐页提取文本，附带 [Page X] 标记'
     ],
@@ -24,6 +25,7 @@ export const methodologyContent = {
   },
   outputSpec: {
     rows: [
+      ['source_file', '全部', '来源 PDF 文件名'],
       ['indicator_code', '全部', '指标代码'],
       ['indicator_name', '全部', '指标名称'],
       ['value_type', '全部', '文字型 / 数值型 / 强度型 / 货币型'],

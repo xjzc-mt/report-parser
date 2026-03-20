@@ -1,16 +1,18 @@
 import { Badge, Progress } from '@mantine/core';
 
-export function ProgressPanel({ progress }) {
+export function ProgressPanel({ progress, eyebrow = 'Run Status', title = '提取进度', maxLogs = null }) {
   if (!progress.visible) {
     return null;
   }
+
+  const displayedLogs = maxLogs ? progress.logs.slice(-maxLogs) : progress.logs;
 
   return (
     <section className="progress-section glass-subpanel">
       <div className="progress-title-row">
         <div>
-          <span className="eyebrow">Run Status</span>
-          <h3 className="progress-kicker">提取进度</h3>
+          <span className="eyebrow">{eyebrow}</span>
+          <h3 className="progress-kicker">{title}</h3>
         </div>
         <Badge
           variant="light"
@@ -34,7 +36,7 @@ export function ProgressPanel({ progress }) {
       </Progress.Root>
       <div className="progress-meta">共记录 {progress.logs.length} 条日志</div>
       <div className="progress-log">
-        {progress.logs.map((entry) => (
+        {displayedLogs.map((entry) => (
           <p key={entry.id} className="progress-log-entry">
             <span className="progress-log-time">[{entry.time}]</span>
             <span className="progress-log-message">{entry.message}</span>

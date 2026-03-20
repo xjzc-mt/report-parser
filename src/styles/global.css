@@ -593,7 +593,8 @@ select option {
 .file-info {
   width: 100%;
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
   padding: 12px 14px;
   border-radius: 14px;
@@ -601,6 +602,38 @@ select option {
   border: 1px solid rgba(52, 211, 153, 0.18);
   color: #dcfce7;
   word-break: break-word;
+}
+
+.file-info-summary {
+  font-weight: 600;
+}
+
+.file-info-list {
+  width: 100%;
+  margin: 0;
+  padding-left: 18px;
+  color: #c7f9dd;
+  font-size: 0.88rem;
+}
+
+.file-info-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.file-info-name {
+  min-width: 0;
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-remove-btn {
+  flex: 0 0 auto;
 }
 
 .action-card {
@@ -918,6 +951,63 @@ td {
   color: #cfe3ff;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.84rem;
+}
+
+.cell-file {
+  display: inline-block;
+  max-width: 240px;
+  color: #dbeafe;
+  font-size: 0.88rem;
+  word-break: break-word;
+}
+
+.compressor-checkbox {
+  justify-content: flex-end;
+}
+
+.compressor-upload-grid {
+  grid-template-columns: 1fr;
+}
+
+.compressor-download-btn {
+  min-width: 110px;
+}
+
+.compressor-simple {
+  gap: 18px;
+}
+
+.compressor-simple-action {
+  display: flex;
+  justify-content: center;
+}
+
+.compressor-start-btn,
+.compressor-download-large {
+  min-width: min(100%, 360px);
+}
+
+.compressor-result-card {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  align-items: stretch;
+}
+
+.compressor-result-header {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.compressor-result-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.compressor-summary-strip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .cell-empty {

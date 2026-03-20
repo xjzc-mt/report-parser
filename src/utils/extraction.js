@@ -160,6 +160,7 @@ export function buildExportData(results) {
   return results
     .filter(isResultFound)
     .map((item) => ({
+      source_file: item.source_file || '',
       indicator_code: item.indicator_code || '',
       indicator_name: item.indicator_name || '',
       value_type: item.value_type || getRequirementValueType(item),
