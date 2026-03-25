@@ -35,6 +35,7 @@ import {
   deleteFile,
   listPdfPages,
   deletePdfPage,
+  deletePdfPagesByReport,
   getRunState,
   saveComparisonRows,
   saveFinalRows,
@@ -63,8 +64,15 @@ function createInitialProgress() {
   return { visible: false, status: '', percentage: 0, logs: [], isLoading: false };
 }
 
+// 记录从 IDB 恢复的 File 对象对应的存储 key，用于确保删除时能找到正确记录
+const restoredFileIds = new WeakMap();
+
 function getFileIdentity(file) {
   return `${file.name}__${file.size}__${file.lastModified}`;
+}
+function getPdfFileId(file) {
+  // 优先使用 IDB 实际存储的 key（恢复的文件），否则用计算值（新上传的文件）
+  return restoredFileIds.get(file) ?? getFileIdentity(file);
 }
 function formatPdfFiles(files) {
   if (!files || files.length === 0) return '';
@@ -374,19 +382,35 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
   // ── 初始化：恢复持久化文件列表、结果和缓存页面 ──────────────────────────────
   useEffect(() => {
     (async () => {
-      // 检查未完成 runState
+      // 生成或复用 session ID（sessionStorage 跨刷新持久，新导航或关闭标签后清空）
+      let sessionId = sessionStorage.getItem('wb_session_id');
+      if (!sessionId) {
+        sessionId = crypto.randomUUID();
+        sessionStorage.setItem('wb_session_id', sessionId);
+      }
+
+      // 检查未完成 runState，仅当 sessionId 匹配时才显示恢复横幅
       try {
         const state = await getRunState();
-        if (state) setPendingRunState(state);
+        if (state) {
+          if (state.sessionId === sessionId) {
+            setPendingRunState(state);
+          } else {
+            // session 不匹配（服务重启后重新导航、关闭标签等）→ 静默清除旧状态
+            resetRunState(RUN_ID).catch(() => {});
+          }
+        }
       } catch (_) { /* ignore */ }
 
       // 恢复 PDF 文件列表
       try {
         const fileRecords = await listFiles('pdf');
         if (fileRecords.length > 0) {
-          const restored = fileRecords.map((r) =>
-            new File([r.data], r.name, { type: 'application/pdf' })
-          );
+          const restored = fileRecords.map((r) => {
+            const f = new File([r.data], r.name, { type: 'application/pdf', lastModified: r.lastModified ?? Date.now() });
+            restoredFileIds.set(f, r.id);
+            return f;
+          });
           setPdfFiles(restored);
         }
       } catch (_) { /* ignore */ }
@@ -447,15 +471,16 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
     for (const f of next) {
       try {
         const ab = await f.arrayBuffer();
-        await saveFile(getFileIdentity(f), f.name, 'pdf', ab);
+        await saveFile(getFileIdentity(f), f.name, 'pdf', ab, f.lastModified);
       } catch (_) { /* 写入失败不阻断 */ }
     }
   };
 
   const handlePdfRemove = async (f) => {
-    const id = getFileIdentity(f);
-    setPdfFiles((prev) => prev.filter((x) => getFileIdentity(x) !== id));
-    try { await deleteFile(id); } catch (_) { /* ignore */ }
+    const idbId = getPdfFileId(f);
+    const uiId = getFileIdentity(f);
+    setPdfFiles((prev) => prev.filter((x) => getFileIdentity(x) !== uiId));
+    try { await deleteFile(idbId); } catch (_) { /* ignore */ }
   };
 
   const handleTestSetSelect = async (file) => {
@@ -492,6 +517,13 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
     try {
       await deletePdfPage(id);
       setCachedPages((prev) => prev.filter((p) => p.id !== id));
+    } catch (_) { /* ignore */ }
+  };
+
+  const handleDeleteReportPages = async (reportName) => {
+    try {
+      await deletePdfPagesByReport(reportName);
+      setCachedPages((prev) => prev.filter((p) => p.reportName !== reportName));
     } catch (_) { /* ignore */ }
   };
 
@@ -584,11 +616,11 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
         testSetFile,
         llm1Settings: { ...llm1Settings, apiKey: apiKey1 },
         onProgress: (e) => appendExLog({ ...e, percentage: e.percentage ?? -1 }),
-        onExLog: (e) => setExLogs((prev) => [...prev, { id: mkLogId(), ...e }]),
         runId: RUN_ID,
         tokenStats: tokenStatsRef.current,
         interruptSignal: interruptRef.current,
-        definitionMap
+        definitionMap,
+        sessionId: sessionStorage.getItem('wb_session_id')
       });
       setTokenStats({ ...tokenStatsRef.current });
       setLlm1Rows(result.llm1Results);
@@ -646,12 +678,12 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
           maxOptIterations: effectiveMaxIter ?? llm2Settings.maxOptIterations
         },
         onProgress: (e) => appendOptLog({ ...e, percentage: e.percentage ?? -1 }),
-        onOptLog: (e) => setOptLogs((prev) => [...prev, { id: mkLogId(), ...e }]),
         runId: RUN_ID,
         tokenStats: tokenStatsRef.current,
         interruptSignal: interruptRef.current,
         onPartialResults: (partialRows) => setFinalRows([...partialRows]),
-        definitionMap
+        definitionMap,
+        sessionId: sessionStorage.getItem('wb_session_id')
       });
       setTokenStats({ ...tokenStatsRef.current });
       setFinalRows(updated);
@@ -856,7 +888,7 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
           <div className="testbench-cache-header">
             <span className="testbench-phase-label">已缓存切分页面</span>
           </div>
-          <PdfPageTree pages={cachedPages} onDelete={handleDeleteCachedPage} />
+          <PdfPageTree pages={cachedPages} onDelete={handleDeleteCachedPage} onDeleteReport={handleDeleteReportPages} />
         </div>
       )}
 

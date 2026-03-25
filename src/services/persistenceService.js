@@ -27,9 +27,9 @@ function getDb() {
 
 // ── files store ───────────────────────────────────────────────────────────────
 
-export async function saveFile(id, name, type, arrayBuffer) {
+export async function saveFile(id, name, type, arrayBuffer, lastModified = null) {
   const db = await getDb();
-  await db.put('files', { id, name, type, data: arrayBuffer, uploadedAt: Date.now() });
+  await db.put('files', { id, name, type, data: arrayBuffer, lastModified, uploadedAt: Date.now() });
 }
 
 export async function getFile(id) {
@@ -64,6 +64,14 @@ export async function getPdfPage(id) {
 export async function deletePdfPage(id) {
   const db = await getDb();
   await db.delete('pdfPages', id);
+}
+
+export async function deletePdfPagesByReport(reportName) {
+  const db = await getDb();
+  const all = await db.getAll('pdfPages');
+  await Promise.all(
+    all.filter((p) => p.reportName === reportName).map((p) => db.delete('pdfPages', p.id))
+  );
 }
 
 export async function listPdfPages() {

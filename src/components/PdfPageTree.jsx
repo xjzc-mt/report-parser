@@ -4,11 +4,12 @@ import { IconChevronDown, IconChevronRight, IconTrash, IconFile, IconDownload } 
 import { getPdfPage } from '../services/persistenceService.js';
 
 /**
- * 按报告折叠展示已缓存切分页，支持单条删除和下载
+ * 按报告折叠展示已缓存切分页，支持单条删除和整报告删除
  * @param {Array} pages - [{ id, reportName, pageRange }]
  * @param {Function} onDelete - (id) => void
+ * @param {Function} onDeleteReport - (reportName) => void
  */
-export function PdfPageTree({ pages, onDelete }) {
+export function PdfPageTree({ pages, onDelete, onDeleteReport }) {
   const [collapsed, setCollapsed] = useState({});
 
   if (!pages || pages.length === 0) return null;
@@ -55,6 +56,21 @@ export function PdfPageTree({ pages, onDelete }) {
             <span className="pdf-page-tree-report-name">{reportName}</span>
             <span className="pdf-page-tree-count">({items.length})</span>
           </button>
+          {onDeleteReport && (
+            <ActionIcon
+              type="button"
+              variant="subtle"
+              color="red"
+              size="xs"
+              radius="xl"
+              onClick={(e) => { e.stopPropagation(); onDeleteReport(reportName); }}
+              aria-label={`删除 ${reportName} 全部缓存`}
+              title="删除该 PDF 所有缓存页"
+              style={{ marginLeft: 4 }}
+            >
+              <IconTrash size={12} stroke={1.8} />
+            </ActionIcon>
+          )}
           {!collapsed[reportName] && (
             <ul className="pdf-page-tree-list">
               {items.map((item) => (

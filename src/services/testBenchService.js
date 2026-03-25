@@ -298,7 +298,8 @@ export async function runExtractionPhase({
   runId,
   tokenStats,
   interruptSignal,
-  definitionMap = null
+  definitionMap = null,
+  sessionId = null
 }) {
   const log = (message, percentage = -1) => {
     onProgress?.({ message, percentage, timestamp: new Date().toLocaleTimeString() });
@@ -331,7 +332,10 @@ export async function runExtractionPhase({
       if (def.definition) parts.push(`指标定义：${def.definition}`);
       if (def.guidance) parts.push(`摘录规则：${def.guidance}`);
       if (def.prompt) parts.push(`摘录Prompt：${def.prompt}`);
-      return parts.length > 0 ? { ...row, prompt: parts.join(' ') } : row;
+      const updated = { ...row };
+      if (parts.length > 0) updated.prompt = parts.join(' ');
+      if (def.value_type_1 && !row.value_type_1) updated.value_type_1 = def.value_type_1;
+      return updated;
     });
   }
 
@@ -395,8 +399,6 @@ export async function runExtractionPhase({
       const groupBatchRows = [];
 
       for (const { valueType, indicators } of subGroups) {
-        const indNames = indicators.map((ind) => ind.indicator_name || ind.indicator_code).join('、');
-        log(`  [${group.report_name}] 第${group.pdf_numbers}页 → 提取：${indNames}`);
         const sysPrompt = buildExtractionSystemPrompt({ isGemini: isGemini1, batchType: valueType });
         const baseUserPrompt = buildTestUserPrompt(indicators, definitionMap);
         const userPrompt = isGemini1 ? baseUserPrompt : `${baseUserPrompt}\n\n文档内容：\n${pdfText}`;
@@ -476,7 +478,8 @@ export async function runExtractionPhase({
           await saveRunState({
             phase: 'extraction',
             completedGroups: Array.from(completedGroupKeys),
-            completedOptimizations: []
+            completedOptimizations: [],
+            sessionId
           });
         } catch (_) { /* 不阻断 */ }
       }
@@ -570,7 +573,8 @@ export async function runOptimizationPhase({
   tokenStats,
   interruptSignal,
   onPartialResults,
-  definitionMap = null
+  definitionMap = null,
+  sessionId = null
 }) {
   const log = (message, percentage = -1) => {
     onProgress?.({ message, percentage, timestamp: new Date().toLocaleTimeString() });
@@ -592,49 +596,52 @@ export async function runOptimizationPhase({
   const maxRetries = llm2Settings.maxRetries || 3;
   const maxOptIterations = llm2Settings.maxOptIterations || 1;
   const similarityThreshold = llm2Settings.similarityThreshold ?? 70;
+  const parallelCount = llm2Settings.parallelCount || 1;
 
   // 收集每轮验证结果（用于导出「优化轮次」sheet）
   // 格式：{ indicator_code, indicator_name, iter(0=原始), prompt, verify_report, verify_sim, llm_text, llm_num }
   const iterationDetails = [];
 
-  for (let i = 0; i < indicatorGroups.length; i += 1) {
-    const group = indicatorGroups[i];
-    const pct = Math.round((i / totalGroups) * 98);
-    const reportCount = new Set(group.rows.map((r) => r.report_name)).size;
-
-    // 中断检查
+  // 按 parallelCount 分批并行处理
+  for (let batchStart = 0; batchStart < indicatorGroups.length; batchStart += parallelCount) {
     if (interruptSignal?.interrupted) {
       log('⚠️ 已中断，停止优化后续指标');
       break;
     }
+    const batch = indicatorGroups.slice(batchStart, batchStart + parallelCount);
 
-    if (completedOptimizations.has(group.indicator_code)) {
-      log(`[${i + 1}/${totalGroups}] 跳过（已完成）：${group.indicator_code}`);
-      continue;
-    }
+    await Promise.all(batch.map(async (group) => {
+      const reportCount = new Set(group.rows.map((r) => r.report_name)).size;
 
-    // 跳过全组已达阈值的指标（Feature 4b）
-    const allAboveThreshold = group.rows.every((r) => (r.similarity ?? 0) >= similarityThreshold);
-    if (allAboveThreshold) {
-      optLog(`[${group.indicator_code}] 全 ${group.rows.length} 条相似度均已≥${similarityThreshold}%，无需优化，跳过`);
-      completedOptimizations.add(group.indicator_code);
-      const optCompletedCount = completedOptimizations.size;
-      onProgress?.({
-        message: `[${optCompletedCount}/${totalGroups}] 已跳过（已达阈值）：${group.indicator_code}`,
-        percentage: Math.round((optCompletedCount / totalGroups) * 100),
-        timestamp: new Date().toLocaleTimeString(),
-        completed: optCompletedCount,
-        total: totalGroups,
-        phase: 'optimization'
-      });
-      onPartialResults?.(resultRows.slice());
-      continue;
-    }
+      if (completedOptimizations.has(group.indicator_code)) {
+        const done = completedOptimizations.size;
+        log(`[${done}/${totalGroups}] 跳过（已完成）：${group.indicator_code}`);
+        return;
+      }
 
-    log(
-      `[${i + 1}/${totalGroups}] 优化指标：${group.indicator_code}（${group.rows.length} 条 · ${reportCount} 份报告）`,
-      pct
-    );
+      // 跳过全组已达阈值的指标
+      const allAboveThreshold = group.rows.every((r) => (r.similarity ?? 0) >= similarityThreshold);
+      if (allAboveThreshold) {
+        optLog(`[${group.indicator_code}] 全 ${group.rows.length} 条相似度均已≥${similarityThreshold}%，无需优化，跳过`);
+        completedOptimizations.add(group.indicator_code);
+        const optCompletedCount = completedOptimizations.size;
+        onProgress?.({
+          message: `[${optCompletedCount}/${totalGroups}] 已跳过（已达阈值）：${group.indicator_code}`,
+          percentage: Math.round((optCompletedCount / totalGroups) * 100),
+          timestamp: new Date().toLocaleTimeString(),
+          completed: optCompletedCount,
+          total: totalGroups,
+          phase: 'optimization'
+        });
+        onPartialResults?.(resultRows.slice());
+        return;
+      }
+
+      const pct = Math.round((completedOptimizations.size / totalGroups) * 98);
+      log(
+        `[${completedOptimizations.size + 1}/${totalGroups}] 优化指标：${group.indicator_code}（${group.rows.length} 条 · ${reportCount} 份报告）`,
+        pct
+      );
 
     let currentPrompt = group.rows.find((r) => r.prompt)?.prompt || '';
     let prevBestSim = group.rows.reduce((s, r) => s + (r.similarity || 0), 0) / (group.rows.length || 1);
@@ -839,7 +846,8 @@ export async function runOptimizationPhase({
           await saveRunState({
             phase: 'optimization',
             completedGroups: Array.from(completedOptimizations),
-            completedOptimizations: Array.from(completedOptimizations)
+            completedOptimizations: Array.from(completedOptimizations),
+            sessionId
           });
         } catch (_) { /* 不阻断 */ }
       }
@@ -880,11 +888,12 @@ export async function runOptimizationPhase({
         await saveRunState({
           phase: 'optimization',
           completedGroups: [],
-          completedOptimizations: Array.from(completedOptimizations)
+          completedOptimizations: Array.from(completedOptimizations),
+          sessionId
         });
       } catch (_) { /* 不阻断 */ }
     }
-    // Feature 4a: 每个指标完成后增量保存
+    // 每个指标完成后增量保存
     try { if (runId) await saveFinalRows(runId, resultRows.slice()); } catch (_) { /* 不阻断 */ }
     onPartialResults?.(resultRows.slice());
     log(`  ✅ 指标 ${group.indicator_code} 优化完成`);
@@ -897,6 +906,7 @@ export async function runOptimizationPhase({
       total: totalGroups,
       phase: 'optimization'
     });
+  }));
   }
 
   log('Prompt 优化全部完成！', 100);
@@ -1067,7 +1077,8 @@ export async function parseDefinitionFile(definitionFile) {
       indicator_name: String(row.indicator_name || '').trim(),
       definition: String(row.definition || '').trim(),
       guidance: String(row.guidance || '').trim(),
-      prompt: String(row.prompt || '').trim()
+      prompt: String(row.prompt || '').trim(),
+      value_type_1: String(row.value_type_1 || row.value_type || '').trim()
     });
   }
   return map;
