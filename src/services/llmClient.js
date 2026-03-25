@@ -7,98 +7,122 @@ export function estimateCost(modelName, inputTokens, outputTokens) {
   return inputTokens * pricing.input + outputTokens * pricing.output;
 }
 
-export async function callLLM({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64 = null }) {
-  const isGemini = apiUrl.includes('googleapis.com');
+/** 判断是否为 Gemini provider */
+function isGeminiProvider(providerType, apiUrl) {
+  if (providerType) return providerType === 'gemini';
+  return (apiUrl || '').includes('googleapis.com');
+}
+
+/** 判断是否为 Anthropic provider */
+function isAnthropicProvider(providerType, apiUrl) {
+  if (providerType) return providerType === 'anthropic';
+  return (apiUrl || '').includes('anthropic.com');
+}
+
+async function callGemini({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64 }) {
   let finalUrl = apiUrl;
-  let requestBody = {};
-  const headers = { 'Content-Type': 'application/json' };
-
-  if (isGemini) {
-    headers['x-goog-api-key'] = apiKey;
-    if (!finalUrl.endsWith('generateContent')) {
-      finalUrl = `${apiUrl.replace(/\/$/, '')}/models/${modelName}:generateContent`;
-    }
-
-    const contents = [{ role: 'user', parts: [{ text: userPrompt }] }];
-
-    if (pdfBase64) {
-      contents[0].parts.unshift({
-        inline_data: {
-          mime_type: 'application/pdf',
-          data: pdfBase64
-        }
-      });
-    }
-
-    requestBody = {
-      system_instruction: { parts: [{ text: sysPrompt }] },
-      contents,
-      generationConfig: {
-        response_mime_type: 'application/json',
-        temperature: 0.1
-      }
-    };
-  } else {
-    headers.Authorization = `Bearer ${apiKey}`;
-    requestBody = {
-      model: modelName,
-      messages: [
-        { role: 'system', content: sysPrompt },
-        { role: 'user', content: userPrompt }
-      ],
-      temperature: 0.1,
-      response_format: { type: 'json_object' }
-    };
+  if (!finalUrl.endsWith('generateContent')) {
+    finalUrl = `${apiUrl.replace(/\/$/, '')}/models/${modelName}:generateContent`;
   }
-
+  const contents = [{ role: 'user', parts: [{ text: userPrompt }] }];
+  if (pdfBase64) {
+    contents[0].parts.unshift({ inline_data: { mime_type: 'application/pdf', data: pdfBase64 } });
+  }
+  const requestBody = {
+    system_instruction: { parts: [{ text: sysPrompt }] },
+    contents,
+    generationConfig: { response_mime_type: 'application/json', temperature: 0.1 }
+  };
   const response = await fetch(finalUrl, {
     method: 'POST',
-    headers,
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
     body: JSON.stringify(requestBody)
   });
-
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`API Error: ${response.status} - ${errorText}`);
+    throw new Error(`Gemini API Error: ${response.status} - ${errorText}`);
   }
-
   const data = await response.json();
   const usage = { input_tokens: 0, output_tokens: 0 };
-
-  if (isGemini) {
-    if (data.usageMetadata) {
-      usage.input_tokens = data.usageMetadata.promptTokenCount || 0;
-      usage.output_tokens = data.usageMetadata.candidatesTokenCount || 0;
-    }
-    const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!text) {
-      throw new Error('Unexpected Gemini API response structure');
-    }
-    return { text, usage };
+  if (data.usageMetadata) {
+    usage.input_tokens = data.usageMetadata.promptTokenCount || 0;
+    usage.output_tokens = data.usageMetadata.candidatesTokenCount || 0;
   }
+  const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error('Unexpected Gemini API response structure');
+  return { text, usage };
+}
 
+async function callAnthropic({ sysPrompt, userPrompt, apiKey, modelName }) {
+  const { Anthropic } = await import('@anthropic-ai/sdk');
+  const client = new Anthropic({ apiKey, dangerouslyAllowBrowser: true });
+  const message = await client.messages.create({
+    model: modelName,
+    max_tokens: 8192,
+    temperature: 0.1,
+    system: sysPrompt,
+    messages: [{ role: 'user', content: userPrompt }]
+  });
+  const usage = {
+    input_tokens: message.usage?.input_tokens || 0,
+    output_tokens: message.usage?.output_tokens || 0
+  };
+  const text = message.content?.[0]?.text || '';
+  return { text, usage };
+}
+
+async function callOpenAI({ sysPrompt, userPrompt, apiUrl, apiKey, modelName }) {
+  const requestBody = {
+    model: modelName,
+    messages: [
+      { role: 'system', content: sysPrompt },
+      { role: 'user', content: userPrompt }
+    ],
+    temperature: 0.1,
+    response_format: { type: 'json_object' }
+  };
+  const response = await fetch(apiUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify(requestBody)
+  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`OpenAI API Error: ${response.status} - ${errorText}`);
+  }
+  const data = await response.json();
+  const usage = { input_tokens: 0, output_tokens: 0 };
   if (data.usage) {
     usage.input_tokens = data.usage.prompt_tokens || 0;
     usage.output_tokens = data.usage.completion_tokens || 0;
   }
-
   return { text: data.choices?.[0]?.message?.content || '', usage };
+}
+
+export async function callLLM({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64 = null, providerType = null }) {
+  if (isAnthropicProvider(providerType, apiUrl)) {
+    return callAnthropic({ sysPrompt, userPrompt, apiKey, modelName });
+  }
+  if (isGeminiProvider(providerType, apiUrl)) {
+    return callGemini({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64 });
+  }
+  return callOpenAI({ sysPrompt, userPrompt, apiUrl, apiKey, modelName });
 }
 
 export async function callLLMWithRetry(params, onProgress, maxRetries = 3) {
   let lastError;
-
   for (let attempt = 0; attempt < maxRetries; attempt += 1) {
     try {
       return await callLLM(params);
     } catch (error) {
       lastError = error;
-      const waitMs = Math.min(1000 * 2 ** attempt, 16000);
-      onProgress?.(`API error (attempt ${attempt + 1}/${maxRetries}): ${error.message}. Retrying in ${waitMs / 1000}s...`, -1);
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
+      if (attempt < maxRetries - 1) {
+        const waitSec = (attempt + 1) * 3;
+        onProgress?.(`API 调用失败（第 ${attempt + 1}/${maxRetries} 次）：${error.message}，${waitSec} 秒后重试...`);
+        await new Promise((resolve) => setTimeout(resolve, waitSec * 1000));
+      }
     }
   }
-
   throw lastError;
 }
 
@@ -106,8 +130,8 @@ export function buildExtractionSystemPrompt({ isGemini, batchType }) {
   const normalizedBatchType = normalizeValueType(batchType);
   const isTextBatch = normalizedBatchType === '文字型';
   const pageRule = isGemini
-    ? '- "pdf_numbers" MUST be the physical PDF page number(s) (the page index in the PDF file), NOT any page number printed in the document content.'
-    : '- "pdf_numbers" refers to the [Page X] markers in the document, NOT any page number printed in the content.';
+    ? '- "pdf_numbers" MUST be the physical PDF page number(s) as they appear in the original document (the page numbers the user sees when reading). Return the ACTUAL page number from the original report, not the position within the extracted subset.'
+    : '- "pdf_numbers" refers to the page numbers as shown in the original document content (the numbers printed on the pages or shown in the table of contents), NOT the position within any extracted subset.';
 
   let fieldRule = '- Extract the text and put it in "text_value".';
   let schema = `{
@@ -116,7 +140,7 @@ export function buildExtractionSystemPrompt({ isGemini, batchType }) {
       "indicator_code": "code matching requirement",
       "year": "2024",
       "text_value": "extracted text. Output '${NOT_FOUND_VALUE}' if not found.",
-      "pdf_numbers": "page reference(s). Output '${NOT_FOUND_VALUE}' if not found."
+      "pdf_numbers": "actual page number(s) from the original report. Output '${NOT_FOUND_VALUE}' if not found."
     }
   ]
 }`;
@@ -130,7 +154,7 @@ export function buildExtractionSystemPrompt({ isGemini, batchType }) {
       "year": "2024",
       "num_value": "extracted number. Output '${NOT_FOUND_VALUE}' if not found.",
       "unit": "unit of the value (e.g. %, tonnes, MWh). Output '${NOT_FOUND_VALUE}' if not found.",
-      "pdf_numbers": "page reference(s). Output '${NOT_FOUND_VALUE}' if not found."
+      "pdf_numbers": "actual page number(s) from the original report. Output '${NOT_FOUND_VALUE}' if not found."
     }
   ]
 }`;
@@ -144,7 +168,7 @@ export function buildExtractionSystemPrompt({ isGemini, batchType }) {
       "num_value": "extracted number. Output '${NOT_FOUND_VALUE}' if not found.",
       "unit": "reporting unit such as million/billion if present. Output '${NOT_FOUND_VALUE}' if not found.",
       "currency": "currency code or symbol from the document. Output '${NOT_FOUND_VALUE}' if not found.",
-      "pdf_numbers": "page reference(s). Output '${NOT_FOUND_VALUE}' if not found."
+      "pdf_numbers": "actual page number(s) from the original report. Output '${NOT_FOUND_VALUE}' if not found."
     }
   ]
 }`;
@@ -159,7 +183,7 @@ export function buildExtractionSystemPrompt({ isGemini, batchType }) {
       "unit": "combined unit if explicitly shown. Output '${NOT_FOUND_VALUE}' if not found.",
       "numerator_unit": "unit in the numerator. Output '${NOT_FOUND_VALUE}' if not found.",
       "denominator_unit": "unit in the denominator. Output '${NOT_FOUND_VALUE}' if not found.",
-      "pdf_numbers": "page reference(s). Output '${NOT_FOUND_VALUE}' if not found."
+      "pdf_numbers": "actual page number(s) from the original report. Output '${NOT_FOUND_VALUE}' if not found."
     }
   ]
 }`;

@@ -7,8 +7,26 @@ import { exportResultsToExcel } from './services/exportService.js';
 import { resolveApiKey, runExtractionJob } from './services/extractionService.js';
 import { getSelectedIndicatorTypes, isResultFound } from './utils/extraction.js';
 
+const LS_SETTINGS = 'intelliextract_settings';
+
+function loadGlobalSettings() {
+  try {
+    const raw = localStorage.getItem(LS_SETTINGS);
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch (_) { /* ignore */ }
+  return { ...DEFAULT_SETTINGS };
+}
+
+function saveGlobalSettings(settings) {
+  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (_) { /* ignore */ }
+}
+
 const CompressorTab = lazy(() => import('./components/CompressorTab.jsx').then((module) => ({
   default: module.CompressorTab
+})));
+
+const TestWorkbenchTab = lazy(() => import('./components/TestWorkbenchTab.jsx').then((module) => ({
+  default: module.TestWorkbenchTab
 })));
 
 function createInitialProgress() {
@@ -37,7 +55,8 @@ function getFileIdentity(file) {
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('extract');
-  const [settings, setSettings] = useState(DEFAULT_SETTINGS);
+  const [hasVisitedTestbench, setHasVisitedTestbench] = useState(false);
+  const [settings, setSettings] = useState(loadGlobalSettings);
   const [pdfFiles, setPdfFiles] = useState([]);
   const [requirementsFile, setRequirementsFile] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -79,7 +98,11 @@ export default function App() {
   };
 
   const handleSettingChange = (key, value) => {
-    setSettings((previous) => ({ ...previous, [key]: value }));
+    setSettings((previous) => {
+      const next = { ...previous, [key]: value };
+      saveGlobalSettings(next);
+      return next;
+    });
   };
 
   const handleIndicatorTypeToggle = (type) => {
@@ -88,10 +111,12 @@ export default function App() {
         ? previous.indicatorTypes.filter((item) => item !== type)
         : [...previous.indicatorTypes, type];
 
-      return {
+      const next = {
         ...previous,
         indicatorTypes: nextTypes
       };
+      saveGlobalSettings(next);
+      return next;
     });
   };
 
@@ -294,7 +319,10 @@ export default function App() {
 
       <Header
         activeTab={activeTab}
-        onTabChange={setActiveTab}
+        onTabChange={(tab) => {
+          if (tab === 'testbench') setHasVisitedTestbench(true);
+          setActiveTab(tab);
+        }}
       />
 
       <div ref={resultsAnchorRef} />
@@ -327,8 +355,17 @@ export default function App() {
         <Suspense fallback={<section className="glass-panel main-panel"><p className="section-caption">正在加载 PDF 压缩器...</p></section>}>
           <CompressorTab />
         </Suspense>
-      ) : (
+      ) : activeTab === 'methodology' ? (
         <MethodologyTab />
+      ) : null}
+
+      {/* TestWorkbenchTab 首次访问后持续挂载，防止切换 tab 时运行状态丢失 */}
+      {hasVisitedTestbench && (
+        <div style={{ display: activeTab === 'testbench' ? 'block' : 'none' }}>
+          <Suspense fallback={<section className="glass-panel main-panel"><p className="section-caption">正在加载测试集工作台...</p></section>}>
+            <TestWorkbenchTab globalSettings={settings} />
+          </Suspense>
+        </div>
       )}
     </main>
   );

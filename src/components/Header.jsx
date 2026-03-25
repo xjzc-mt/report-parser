@@ -1,4 +1,4 @@
-import { IconBooks, IconFileTypePdf, IconLayoutDashboard } from '@tabler/icons-react';
+import { IconBooks, IconFileTypePdf, IconFlask, IconLayoutDashboard } from '@tabler/icons-react';
 
 export function Header({ activeTab, onTabChange }) {
   return (
@@ -18,7 +18,15 @@ export function Header({ activeTab, onTabChange }) {
               onClick={() => onTabChange('extract')}
             >
               <IconLayoutDashboard size={18} stroke={1.8} />
-              <span>工作台</span>
+              <span>摘录工作台</span>
+            </button>
+            <button
+              type="button"
+              className={`tab-button ${activeTab === 'testbench' ? 'active' : ''}`}
+              onClick={() => onTabChange('testbench')}
+            >
+              <IconFlask size={18} stroke={1.8} />
+              <span>测试集工作台</span>
             </button>
             <button
               type="button"

@@ -31,3 +31,7 @@ build/
 # PDF/Excel extraction results
 web/extraction_results_*.csv
 extraction_results_*.xlsx
+
+# openspec
+openspec/
+.claude/skills/openspec*

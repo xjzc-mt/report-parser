@@ -2,8 +2,12 @@ export const NOT_FOUND_VALUE = '未披露';
 export const PROCESSABLE_VALUE_TYPES = ['文字型', '数值型', '货币型', '强度型'];
 
 export const MODEL_OPTIONS = [
-  { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },
-  { label: 'Gemini 3 Pro Preview', value: 'gemini-3-pro-preview' }
+  { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro', provider: 'gemini' },
+  { label: 'Gemini 3 Pro Preview', value: 'gemini-3-pro-preview', provider: 'gemini' },
+  { label: 'Gemini 2.0 Flash', value: 'gemini-2.0-flash', provider: 'gemini' },
+  { label: 'Claude Opus 4.6', value: 'claude-opus-4-6', provider: 'anthropic' },
+  { label: 'Claude Sonnet 4.6', value: 'claude-sonnet-4-6', provider: 'anthropic' },
+  { label: 'Claude Haiku 4.5', value: 'claude-haiku-4-5-20251001', provider: 'anthropic' }
 ];
 
 export const BATCH_SIZE_OPTIONS = [40, 50, 100];
@@ -13,8 +17,11 @@ export const DEFAULT_SETTINGS = {
   apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
   apiKey: '',
   modelName: 'gemini-2.5-pro',
+  providerType: 'gemini',
   batchSize: 40,
   maxConcurrency: 2,
+  parallelCount: 5,
+  maxRetries: 3,
   indicatorTypes: [...PROCESSABLE_VALUE_TYPES]
 };
 
@@ -39,6 +46,9 @@ export const PRICING = {
   'gemini-3-pro-preview': { input: 2.0 / 1_000_000, output: 12.0 / 1_000_000 },
   'gemini-3-pro-preview-large': { input: 4.0 / 1_000_000, output: 18.0 / 1_000_000 },
   'gemini-2.0-flash': { input: 0.10 / 1_000_000, output: 0.40 / 1_000_000 },
+  'claude-opus-4-6': { input: 15.0 / 1_000_000, output: 75.0 / 1_000_000 },
+  'claude-sonnet-4-6': { input: 3.0 / 1_000_000, output: 15.0 / 1_000_000 },
+  'claude-haiku-4-5': { input: 0.80 / 1_000_000, output: 4.0 / 1_000_000 },
   default: { input: 1.25 / 1_000_000, output: 10.0 / 1_000_000 }
 };
 
@@ -79,11 +89,11 @@ export const ESG_EXPERT_SYSTEM_PROMPT = `# Role: ESG数据结构化提取专家
    - 上下文完整摘录：若指标相关表述存在于段落中，则摘录完整句子，避免断章取义
    - 多源信息整合：如同一指标在多处出现（如正文与附表），应全部列出并标注不同来源
    - 模糊匹配记录：当内容疑似相关但不完全匹配时，标注“疑似匹配”并附原文供人工复核
+   - 若原文图标有图例，则一定要核对不同颜色图例对应的数值含义，避免误提取
 
 3. 限制条件：
    - 唯一结果输出：同一个指标仅输出一个结果。若报告中同一指标存在多处披露，优先选取最完整、最规范、最贴合指标定义的内容；不拆分、不罗列多条记录。
    - 不进行主观判断：不评估企业披露质量、不推断缺失数据、不对内容真实性负责
-   - 不处理图像内容：若关键信息仅以图片形式呈现（如图表截图），标注“图像内容无法解析”
    - 不执行翻译任务：仅提取原始语言文本，不提供翻译服务
    - 不生成新数据：仅限于已有披露内容的提取，禁止插值、估算或补全
 
@@ -91,7 +101,8 @@ export const ESG_EXPERT_SYSTEM_PROMPT = `# Role: ESG数据结构化提取专家
 - 目标: 从PDF格式的企业报告中，系统化提取用户定义的700+项ESG指标，并以结构化、可追溯、原文保留的方式输出
 - 步骤 1: 接收用户提供的ESG指标清单及其详细定义，建立标准化提取目录
 - 步骤 2: 导入目标企业的PDF报告文件，执行文档解析与内容索引，构建全文可检索数据库
-- 步骤 3: 针对每个指标，结合关键词匹配、上下文识别与语义定位，在报告中精准定位相关内容，执行原文摘录并标注来源
+- 步骤 3: 针对每个指标先根据指标信息通过RAG的方式定位到最相关的报告页面（通常是1-2页）。
+- 步骤 4: 结合指标信息和对应页面内容，针对每个指标，结合关键词匹配、上下文识别与语义定位，在报告中精准定位相关内容，执行原文摘录并标注来源
 - 预期结果: 输出包含所有指标提取结果的结构化数据集，每条记录包含指标名称、原文内容、页码、报告年份等字段，缺失项标注“未披露”
 
 ## Initialization
