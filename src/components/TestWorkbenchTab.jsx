@@ -17,6 +17,11 @@ import { UploadCard } from './UploadCard.jsx';
 import { ProgressPanel } from './ProgressPanel.jsx';
 import { PdfPageTree } from './PdfPageTree.jsx';
 import { LLMSettingsDrawer } from './LLMSettingsDrawer.jsx';
+import { ModeSelector } from './ModeSelector.jsx';
+import { FullFlowMode } from './FullFlowMode.jsx';
+import { QuickValidationMode } from './QuickValidationMode.jsx';
+import { QuickOptimizationMode } from './QuickOptimizationMode.jsx';
+import { AnalysisView } from './AnalysisView.jsx';
 import { DEFAULT_SETTINGS } from '../constants/extraction.js';
 import { DEFAULT_LLM1_SETTINGS, DEFAULT_LLM2_SETTINGS } from '../constants/testBench.js';
 import {
@@ -315,6 +320,9 @@ function LogPanel({ title, logs, emptyHint = '暂无日志' }) {
 const RUN_ID = 'testbench_run';
 
 export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
+  // ── 工作模式状态 ─────────────────────────────────────────────────────────────
+  const [mode, setMode] = useState('full');
+
   // ── LLM 设置（从 localStorage 恢复）────────────────────────────────────────
   const [llm1Settings, setLlm1Settings] = useState(() => loadSettings(LS_LLM1, {
     ...DEFAULT_LLM1_SETTINGS,
@@ -372,12 +380,29 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
   // ── 阶段结果 ───────────────────────────────────────────────────────────────
   const [llm1Rows, setLlm1Rows] = useState(null);
   const [comparisonRows, setComparisonRows] = useState(null);
+  // 从验收模式跳转时传入的预选优化指标
+  const [preselectedOptCodes, setPreselectedOptCodes] = useState([]);
   const [finalRows, setFinalRows] = useState(null);
   const [iterationDetails, setIterationDetails] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
 
   // ── 断点恢复提示 ───────────────────────────────────────────────────────────
   const [pendingRunState, setPendingRunState] = useState(null);
+
+  // ── 模式切换处理 ───────────────────────────────────────────────────────────
+  const handleModeChange = (newMode) => {
+    console.log('handleModeChange called:', newMode, 'isRunning:', isRunning);
+    if (isRunning) return;
+    if ((comparisonRows && comparisonRows.length > 0) || finalRows) {
+      if (!window.confirm('切换模式将清空当前结果，是否继续？')) {
+        return;
+      }
+    }
+    console.log('Setting mode to:', newMode);
+    setMode(newMode);
+    setComparisonRows([]);
+    setFinalRows(null);
+  };
 
   // ── 初始化：恢复持久化文件列表、结果和缓存页面 ──────────────────────────────
   useEffect(() => {
@@ -820,6 +845,16 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
         </div>
       </div>
 
+      {/* ── 模式选择器 ── */}
+      <ModeSelector
+        currentMode={mode}
+        onModeChange={handleModeChange}
+        disabled={isRunning}
+      />
+
+      {/* ── 完整流程模式（当前现有功能） ── */}
+      {mode === 'full' && (
+        <>
       {/* ── 未完成运行提示 ── */}
       {pendingRunState && !isRunning && (
         <div className="testbench-resume-banner">
@@ -965,8 +1000,12 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
               </Button>
             </div>
           </div>
-          <SummaryStrip rows={comparisonRows} />
-          <ResultsAnalytics rows={comparisonRows} similarityThreshold={llm2Settings.similarityThreshold ?? 70} />
+          <AnalysisView comparisonRows={comparisonRows} similarityThreshold={llm2Settings.similarityThreshold ?? 70}>
+            <div>
+              <SummaryStrip rows={comparisonRows} />
+              <ResultsAnalytics rows={comparisonRows} similarityThreshold={llm2Settings.similarityThreshold ?? 70} />
+            </div>
+          </AnalysisView>
 
           {/* 阶段二入口 + 循环优化开关 */}
           <div className="testbench-action testbench-opt-action" style={{ marginTop: 8 }}>
@@ -1104,6 +1143,36 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
           </div>
         </div>
       </div>
+        </>
+      )}
+
+      {/* ── 快速验收模式 ── */}
+      {mode === 'validation' && (
+        <QuickValidationMode
+          globalSettings={globalSettings}
+          llm1Settings={llm1Settings}
+          llm2Settings={llm2Settings}
+          onChangeLlm1={handleChangeLlm1}
+          onChangeLlm2={handleChangeLlm2}
+          onSwitchToOptimization={(rows, preselectedCodes) => {
+            setComparisonRows(rows);
+            setPreselectedOptCodes(preselectedCodes || []);
+            setMode('optimization');
+          }}
+        />
+      )}
+
+      {/* ── 快速优化模式 ── */}
+      {mode === 'optimization' && (
+        <QuickOptimizationMode
+          globalSettings={globalSettings}
+          llm1Settings={llm1Settings}
+          llm2Settings={llm2Settings}
+          onChangeLlm1={handleChangeLlm1}
+          onChangeLlm2={handleChangeLlm2}
+          preselectedCodes={preselectedOptCodes}
+        />
+      )}
 
       {/* ── LLM 配置抽屉 ── */}
       <LLMSettingsDrawer

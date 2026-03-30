@@ -157,3 +157,23 @@ export async function clearPhaseResults(runId) {
   await db.delete('phaseResults', `${runId}_comparison`);
   await db.delete('phaseResults', `${runId}_final`);
 }
+
+// ── 快速验收模式结果持久化（固定 key，不依赖 runId）─────────────────────────
+
+const VALIDATION_KEY = 'validation_comparison';
+
+export async function saveValidationResults(rows) {
+  const db = await getDb();
+  await db.put('phaseResults', { id: VALIDATION_KEY, rows, savedAt: Date.now() });
+}
+
+export async function getValidationResults() {
+  const db = await getDb();
+  const entry = await db.get('phaseResults', VALIDATION_KEY);
+  return entry?.rows ?? null;
+}
+
+export async function clearValidationResults() {
+  const db = await getDb();
+  await db.delete('phaseResults', VALIDATION_KEY);
+}

@@ -19,7 +19,7 @@ import {
 // ── 相似度计算 ────────────────────────────────────────────────────────────────
 
 /**
- * 计算两个字符串的关键词匹配相似度（Jaccard 相似系数）
+ * 计算两个字符串的关键词匹配相似度
  * 支持中英文混合文本，返回 0–100 整数
  */
 export function calculateSimilarity(testValue, llmValue) {
@@ -31,9 +31,17 @@ export function calculateSimilarity(testValue, llmValue) {
   if (testStr.toLowerCase() === llmStr.toLowerCase()) return 100;
   if (llmStr === NOT_FOUND_VALUE || testStr === NOT_FOUND_VALUE) return 0;
 
+  // 检查包含关系：如果测试集完全包含在LLM结果中，或反之，则100%
+  if (llmStr.includes(testStr) || testStr.includes(llmStr)) return 100;
+
+  const simplifyTraditional = (str) => {
+    const map = { '萬': '万', '億': '亿', '幣': '币', '員': '员', '時': '时', '間': '间', '產': '产', '業': '业', '環': '环', '質': '质', '減': '减', '噸': '吨', '電': '电', '氣': '气', '標': '标', '準': '准', '總': '总', '數': '数', '據': '据', '報': '报', '導': '导', '購': '购', '銷': '销', '營': '营', '運': '运', '資': '资', '財': '财', '經': '经', '濟': '济', '發': '发', '開': '开', '關': '关', '機': '机', '構': '构', '組': '组', '織': '织', '類': '类', '項': '项', '費': '费', '價': '价', '貨': '货' };
+    return str.replace(/[\u4e00-\u9fff]/g, (ch) => map[ch] || ch);
+  };
+
   const tokenize = (str) => {
     const tokens = new Set();
-    const normalized = str.toLowerCase();
+    const normalized = simplifyTraditional(str.toLowerCase());
     const parts = normalized
       .split(/[\s,，。、；;：:""''（）()【】[\]！!？?—\-_/\\|+]+/)
       .filter(Boolean);
@@ -54,9 +62,54 @@ export function calculateSimilarity(testValue, llmValue) {
     if (llmTokens.has(token)) intersectionCount += 1;
   }
 
-  const unionSize = testTokens.size + llmTokens.size - intersectionCount;
-  if (unionSize === 0) return 100;
-  return Math.round((intersectionCount / unionSize) * 100);
+  // 分母改为测试集大小（而非并集）
+  if (testTokens.size === 0) return 0;
+  return Math.round((intersectionCount / testTokens.size) * 100);
+}
+
+/**
+ * 计算基于 LLM 结果的相似度（LLM token 覆盖率）
+ * 返回 LLM 结果中有多少比例的 token 在测试集标准答案中出现
+ */
+function calculateLlmBasedSimilarity(testValue, llmValue) {
+  const testStr = String(testValue || '').trim();
+  const llmStr = String(llmValue || '').trim();
+
+  if (!testStr && !llmStr) return 100;
+  if (!llmStr) return 0;
+  if (!testStr) return 0;
+  if (testStr.toLowerCase() === llmStr.toLowerCase()) return 100;
+  if (llmStr === NOT_FOUND_VALUE || testStr === NOT_FOUND_VALUE) return 0;
+
+  const simplifyTraditional = (str) => {
+    const map = { '萬': '万', '億': '亿', '幣': '币', '員': '员', '時': '时', '間': '间', '產': '产', '業': '业', '環': '环', '質': '质', '減': '减', '噸': '吨', '電': '电', '氣': '气', '標': '标', '準': '准', '總': '总', '數': '数', '據': '据', '報': '报', '導': '导', '購': '购', '銷': '销', '營': '营', '運': '运', '資': '资', '財': '财', '經': '经', '濟': '济', '發': '发', '開': '开', '關': '关', '機': '机', '構': '构', '組': '组', '織': '织', '類': '类', '項': '项', '費': '费', '價': '价', '貨': '货' };
+    return str.replace(/[\u4e00-\u9fff]/g, (ch) => map[ch] || ch);
+  };
+
+  const tokenize = (str) => {
+    const tokens = new Set();
+    const normalized = simplifyTraditional(str.toLowerCase());
+    const parts = normalized
+      .split(/[\s,，。、；;：:""''（）()【】[\]！!？?—\-_/\\|+]+/)
+      .filter(Boolean);
+    for (const part of parts) {
+      tokens.add(part);
+      for (const char of part) {
+        if (/[\u4e00-\u9fff\u3400-\u4dbf]/.test(char)) tokens.add(char);
+      }
+    }
+    return tokens;
+  };
+
+  const testTokens = tokenize(testStr);
+  const llmTokens = tokenize(llmStr);
+
+  let matchCount = 0;
+  for (const token of llmTokens) {
+    if (testTokens.has(token)) matchCount += 1;
+  }
+
+  return llmTokens.size > 0 ? Math.round((matchCount / llmTokens.size) * 100) : 0;
 }
 
 /** 判断值是否为空或未披露 */
@@ -223,6 +276,7 @@ function joinTestSetWithLlm1(testSetRows, llm1Results) {
         ...testRow,
         match_status: '未匹配',
         similarity: 0,
+        llm_based_similarity: 0,
         llm_year: '',
         llm_text_value: '',
         llm_num_value: '',
@@ -250,10 +304,16 @@ function joinTestSetWithLlm1(testSetRows, llm1Results) {
         // 主相似度 = 所有适用字段（双端非空）的平均
         const similarity = avgFieldSims(textSim, numSim, unitSim, currencySim, numeratorSim, denominatorSim) ?? 0;
 
+        // 基于 LLM 的相似度（反向计算）
+        const textLlmSim = isEmptyOrNotFound(testRow.text_value) && isEmptyOrNotFound(llmRow.text_value) ? null : calculateLlmBasedSimilarity(testRow.text_value, llmRow.text_value);
+        const numLlmSim = isEmptyOrNotFound(testRow.num_value) && isEmptyOrNotFound(llmRow.num_value) ? null : calculateLlmBasedSimilarity(String(testRow.num_value ?? ''), String(llmRow.num_value ?? ''));
+        const llm_based_similarity = avgFieldSims(textLlmSim, numLlmSim) ?? 0;
+
         comparisonRows.push({
           ...testRow,
           match_status: matched.length > 1 ? '多结果' : '已匹配',
           similarity,
+          llm_based_similarity,
           llm_year: llmRow.year || '',
           llm_text_value: llmRow.text_value || '',
           llm_num_value: llmRow.num_value || '',
@@ -920,7 +980,7 @@ export async function exportComparisonRows(comparisonRows) {
   const XLSX = await import('xlsx');
   const ts = new Date().toISOString().slice(0, 16).replace('T', '_').replace(':', '');
 
-  const rows = comparisonRows.map((r) => ({
+  const baseFields = (r) => ({
     source_announce_id: r.source_announce_id || '',
     report_name: r.report_name || '',
     report_type: r.report_type || '',
@@ -939,24 +999,39 @@ export async function exportComparisonRows(comparisonRows) {
     test_denominator_unit: r.denominator_unit || '',
     original_prompt: r.prompt || '',
     match_status: r.match_status || '',
-    similarity: r.similarity ?? '',
     llm_year: r.llm_year || '',
     llm_text_value: r.llm_text_value || '',
     llm_num_value: r.llm_num_value || '',
     llm_unit: r.llm_unit || '',
-    unit_similarity: r.unit_similarity ?? '',
     llm_currency: r.llm_currency || '',
-    currency_similarity: r.currency_similarity ?? '',
     llm_numerator_unit: r.llm_numerator_unit || '',
-    numerator_unit_similarity: r.numerator_unit_similarity ?? '',
     llm_denominator_unit: r.llm_denominator_unit || '',
-    denominator_unit_similarity: r.denominator_unit_similarity ?? '',
     llm_pdf_numbers: r.llm_pdf_numbers || ''
+  });
+
+  const testBasedRows = comparisonRows.map((r) => ({
+    ...baseFields(r),
+    similarity: r.similarity ?? '',
+    unit_similarity: r.unit_similarity ?? '',
+    currency_similarity: r.currency_similarity ?? '',
+    numerator_unit_similarity: r.numerator_unit_similarity ?? '',
+    denominator_unit_similarity: r.denominator_unit_similarity ?? ''
+  }));
+
+  const llmBasedRows = comparisonRows.map((r) => ({
+    ...baseFields(r),
+    similarity: r.llm_based_similarity ?? '',
+    unit_similarity: r.unit_similarity ?? '',
+    currency_similarity: r.currency_similarity ?? '',
+    numerator_unit_similarity: r.numerator_unit_similarity ?? '',
+    denominator_unit_similarity: r.denominator_unit_similarity ?? ''
   }));
 
   const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(wb, ws, '提取对比结果');
+  const ws1 = XLSX.utils.json_to_sheet(testBasedRows);
+  const ws2 = XLSX.utils.json_to_sheet(llmBasedRows);
+  XLSX.utils.book_append_sheet(wb, ws1, '基于测试集');
+  XLSX.utils.book_append_sheet(wb, ws2, '基于LLM');
   XLSX.writeFile(wb, `comparison_${ts}.xlsx`);
 }
 
@@ -1117,4 +1192,62 @@ export async function exportLlm1Results(llm1Rows) {
   const ws = XLSX.utils.json_to_sheet(rows);
   XLSX.utils.book_append_sheet(wb, ws, 'LLM提取结果');
   XLSX.writeFile(wb, `llm1_results_${ts}.xlsx`);
+}
+
+/** 解析用户上传的 LLM 结果文件（快速验收模式） */
+export async function parseLlmResultsFile(file) {
+  const rows = await parseExcel(file);
+  const requiredFields = ['report_name', 'indicator_code'];
+
+  if (rows.length > 0) {
+    const firstRow = rows[0];
+    const missingFields = requiredFields.filter(f => !(f in firstRow));
+    if (missingFields.length > 0) {
+      throw new Error(`缺少必需字段: ${missingFields.join(', ')}`);
+    }
+  }
+
+  return rows.map((r) => ({
+    report_name: String(r.report_name || '').trim(),
+    indicator_code: String(r.indicator_code || '').trim(),
+    year: String(r.year || r.data_year || '').trim(),
+    text_value: String(r.text_value || '').trim(),
+    num_value: String(r.num_value || '').trim(),
+    unit: String(r.unit || '').trim(),
+    currency: String(r.currency || '').trim(),
+    numerator_unit: String(r.numerator_unit || '').trim(),
+    denominator_unit: String(r.denominator_unit || '').trim(),
+    pdf_numbers: String(r.pdf_numbers || '').trim()
+  }));
+}
+
+/** 将上传的 LLM 结果与测试集关联（快速验收模式） */
+export function joinLlmResultsWithTestSet(llmResults, testSetRows) {
+  return joinTestSetWithLlm1(testSetRows, llmResults);
+}
+
+/** 检查 PDF 匹配情况（快速优化模式） */
+export function checkPdfMatching(requiredReports, pdfFiles) {
+  const matched = [];
+  const missing = [];
+
+  for (const reportName of requiredReports) {
+    const pdfFile = pdfFiles.find(f => f.name.replace(/\.[^/.]+$/, '') === reportName);
+    if (pdfFile) {
+      matched.push({ reportName, pdfFile });
+    } else {
+      missing.push({ reportName });
+    }
+  }
+
+  const coverage = requiredReports.length > 0 ? matched.length / requiredReports.length : 0;
+  return { matched, missing, coverage };
+}
+
+/** 过滤出有对应 PDF 的行（快速优化模式） */
+export function filterRowsByPdfAvailability(comparisonRows, availablePdfs) {
+  const pdfSet = new Set(availablePdfs.map(p => p.reportName));
+  const optimizableRows = comparisonRows.filter(r => pdfSet.has(r.report_name));
+  const skippedRows = comparisonRows.filter(r => !pdfSet.has(r.report_name));
+  return { optimizableRows, skippedRows };
 }

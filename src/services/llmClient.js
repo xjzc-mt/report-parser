@@ -72,6 +72,10 @@ async function callAnthropic({ sysPrompt, userPrompt, apiKey, modelName }) {
 }
 
 async function callOpenAI({ sysPrompt, userPrompt, apiUrl, apiKey, modelName }) {
+  let finalUrl = apiUrl;
+  if (!finalUrl.includes('/chat/completions')) {
+    finalUrl = `${apiUrl.replace(/\/$/, '')}/chat/completions`;
+  }
   const requestBody = {
     model: modelName,
     messages: [
@@ -81,7 +85,7 @@ async function callOpenAI({ sysPrompt, userPrompt, apiUrl, apiKey, modelName }) 
     temperature: 0.1,
     response_format: { type: 'json_object' }
   };
-  const response = await fetch(apiUrl, {
+  const response = await fetch(finalUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
     body: JSON.stringify(requestBody)
