@@ -118,10 +118,10 @@ export function QuickValidationMode({ onSwitchToOptimization, llm2Settings }) {
     try {
       const llmResults = await parseLlmResultsFile(llmResultFile);
       const testSetRows = await parseExcel(testSetFile);
-      const rows = joinLlmResultsWithTestSet(llmResults, testSetRows);
-      setComparisonRows(rows);
+      const { validRows } = joinLlmResultsWithTestSet(llmResults, testSetRows);
+      setComparisonRows(validRows);
       // 持久化分析结果
-      await saveValidationResults(rows).catch(() => {});
+      await saveValidationResults(validRows).catch(() => {});
     } catch (err) {
       setError(err.message);
     } finally {

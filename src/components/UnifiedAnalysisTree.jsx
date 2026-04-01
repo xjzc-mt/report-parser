@@ -1,5 +1,5 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { Badge, Tooltip, NumberInput, Text, Button, Select, MultiSelect, useCombobox, Checkbox, Popover } from '@mantine/core';
+import { Badge, Tooltip, NumberInput, Text, Button, Select, MultiSelect, useCombobox, Checkbox, Popover, Switch } from '@mantine/core';
 import { IconChevronRight, IconChevronDown, IconArrowRight, IconDownload } from '@tabler/icons-react';
 import { buildTreeData, calculateOverallMetrics } from '../utils/reportAnalytics.js';
 import { ErrorTypeBar } from './ErrorTypeBar.jsx';
@@ -291,7 +291,7 @@ function MetricsBadge({ value, isRaw }) {
 /**
  * 右侧列表渲染，根据当前节点 level 显示不同列
  */
-function RightPanel({ selectedNode, treeData, threshold, onSelectNode, sortConfig, onSortChange, useLlmBased }) {
+function RightPanel({ selectedNode, treeData, threshold, onSelectNode, sortConfig, onSortChange, useLlmBased, includeHallucination }) {
   if (!selectedNode) {
     return (
       <div style={{ padding: 20, color: '#64748b', fontSize: 12 }}>
@@ -357,17 +357,26 @@ function RightPanel({ selectedNode, treeData, threshold, onSelectNode, sortConfi
           <SortableHeader label="精确率" field="precision" sortConfig={sortConfig} onSort={onSortChange} />
           <SortableHeader label="F1" field="f1" sortConfig={sortConfig} onSort={onSortChange} />
           <SortableHeader label="相似度" field="avgSimilarity" sortConfig={sortConfig} onSort={onSortChange} />
-          <Tooltip label="该指标在多少份报告中达标" withArrow>
-            <span style={{ cursor: 'help' }}>跨报告稳定性</span>
-          </Tooltip>
           <span>条数</span>
+          <Tooltip label="该指标在多少份报告中达标" withArrow>
+            <span style={{ cursor: 'help', whiteSpace: 'nowrap' }}>跨报告稳定性</span>
+          </Tooltip>
         </TableHead>
         {sortedChildren.map((child) => {
           const { metrics } = child;
-          const [code, ...nameParts] = child.label.split(' ');
+          const isHallucination = child.rows.every(r => r.match_status === '幻觉');
+
+          // 不统计过摘录时，跳过过摘录指标
+          if (isHallucination && !includeHallucination) return null;
+
+          // 过摘录指标：从第一行 LLM 数据获取名称
+          const displayLabel = isHallucination
+            ? `🔴 过摘录 | ${child.rows[0]?.indicator_code || ''} ${child.rows[0]?.llm_indicator_name || child.rows[0]?.indicator_name || ''}`
+            : child.label;
+          const [code, ...nameParts] = displayLabel.split(' ');
           return (
             <TableRow key={child.id} cols={COL_STYLES.indList} onClick={() => onSelectNode(child)}>
-              <Tooltip label={child.label} withArrow>
+              <Tooltip label={displayLabel} withArrow>
                 <span style={ELLIPSIS_STYLE}>
                   <span style={{ color: '#6366f1', fontSize: 10, fontWeight: 700, marginRight: 4 }}>
                     {code}
@@ -384,11 +393,11 @@ function RightPanel({ selectedNode, treeData, threshold, onSelectNode, sortConfi
               <span style={{ color: simColor(metrics.avgSimilarity) }}>
                 {metrics.avgSimilarity}%
               </span>
+              <span style={{ color: '#64748b' }}>{metrics.totalCount}</span>
               <ConsistencyDots
                 dots={metrics.consistencyDots}
                 score={metrics.consistencyScore}
               />
-              <span style={{ color: '#64748b' }}>{metrics.totalCount}</span>
             </TableRow>
           );
         })}
@@ -470,7 +479,7 @@ function RightPanel({ selectedNode, treeData, threshold, onSelectNode, sortConfi
 
     return (
       <div>
-        <TableHead cols="1fr 60px 72px 72px 72px 72px 60px">
+        <TableHead cols={COL_STYLES.reportList}>
           <span>报告</span>
           <SortableHeader label="条数" field="totalCount" sortConfig={sortConfig} onSort={onSortChange} />
           <SortableHeader label="准确率" field="accuracy" sortConfig={sortConfig} onSort={onSortChange} />
@@ -480,7 +489,7 @@ function RightPanel({ selectedNode, treeData, threshold, onSelectNode, sortConfi
           <SortableHeader label="相似度" field="avgSimilarity" sortConfig={sortConfig} onSort={onSortChange} />
         </TableHead>
         {sortedChildren.map((child) => (
-          <TableRow key={child.id} cols="1fr 60px 72px 72px 72px 72px 60px" onClick={() => onSelectNode(child)}>
+          <TableRow key={child.id} cols={COL_STYLES.reportList} onClick={() => onSelectNode(child)}>
             <Tooltip label={child.label} withArrow>
               <span style={{ ...ELLIPSIS_STYLE, fontWeight: 600, color: '#1e40af' }}>{child.label} ›</span>
             </Tooltip>
@@ -602,36 +611,11 @@ function RightPanel({ selectedNode, treeData, threshold, onSelectNode, sortConfi
               {year}
             </div>
             {rows.map((row, i) => {
+              // 不统计过摘录时，跳过幻觉行
+              if (row.match_status === '幻觉' && !includeHallucination) return null;
+
               const hasCurrency = (row.currency || '').trim();
-              const sims = {};
-
-              sims.pdf = calculateFieldSimilarity(row.pdf_numbers, row.llm_pdf_numbers, 'exact');
-
-              let avgSim = 0;
-              if (vt === '文字型') {
-                const llmSim = useLlmBased ? (row.llm_based_similarity ?? 0) : null;
-                sims.text = calculateFieldSimilarity(row.text_value, row.llm_text_value, 'text', useLlmBased, llmSim);
-                avgSim = Math.round(sims.pdf * 0.1 + sims.text * 0.9);
-              } else if (vt === '数值型') {
-                sims.num = calculateFieldSimilarity(row.num_value, row.llm_num_value, 'numeric');
-                sims.unit = calculateFieldSimilarity(row.unit, row.llm_unit, 'exact');
-                if (hasCurrency) {
-                  sims.currency = calculateFieldSimilarity(row.currency, row.llm_currency, 'exact');
-                  avgSim = Math.round(sims.pdf * 0.1 + sims.num * 0.6 + sims.unit * 0.15 + sims.currency * 0.15);
-                } else {
-                  avgSim = Math.round(sims.pdf * 0.1 + sims.num * 0.6 + sims.unit * 0.3);
-                }
-              } else if (vt === '强度型') {
-                sims.num = calculateFieldSimilarity(row.num_value, row.llm_num_value, 'numeric');
-                sims.unit = calculateFieldSimilarity(row.unit, row.llm_unit, 'exact');
-                sims.numUnit = calculateFieldSimilarity(row.numerator_unit, row.llm_numerator_unit, 'exact');
-                sims.denUnit = calculateFieldSimilarity(row.denominator_unit, row.llm_denominator_unit, 'exact');
-                avgSim = Math.round(sims.pdf * 0.1 + sims.num * 0.6 + sims.unit * 0.2 + sims.numUnit * 0.05 + sims.denUnit * 0.05);
-              } else if (vt === '货币型') {
-                sims.num = calculateFieldSimilarity(row.num_value, row.llm_num_value, 'numeric');
-                sims.unit = calculateFieldSimilarity(row.unit, row.llm_unit, 'exact');
-                avgSim = Math.round(sims.pdf * 0.1 + sims.num * 0.6 + sims.unit * 0.3);
-              }
+              const avgSim = row.similarity ?? 0;
 
               return (
                 <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 100px', gap: 12, padding: '10px 12px', borderBottom: '1px solid #e2e8f0', fontSize: 11, alignItems: 'start' }}>
@@ -710,11 +694,166 @@ function RightPanel({ selectedNode, treeData, threshold, onSelectNode, sortConfi
                   </div>
 
                   <div style={{ textAlign: 'center' }}>
-                    <Badge size="xs" color={row.match_status === '未匹配' ? 'red' : avgSim >= 70 ? 'green' : 'yellow'} style={{ marginBottom: 6 }}>
+                    <Badge size="xs" color={row.match_status === '幻觉' ? 'grape' : row.match_status === '未匹配' ? 'red' : avgSim >= 70 ? 'green' : 'yellow'} style={{ marginBottom: 6 }}>
                       {row.match_status}
                     </Badge>
                     <div style={{ color: simColor(avgSim), fontWeight: 600, fontSize: 13 }}>平均</div>
                     <div style={{ color: simColor(avgSim), fontWeight: 700, fontSize: 16 }}>{avgSim}%</div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // ── 按指标类型：根节点（全部指标）→ 显示 3 种类型 ──────────────────────────
+  if (section === 'per-type' && level === 'perTypeRoot') {
+    return (
+      <div>
+        <TableHead cols={COL_STYLES.typeList}>
+          <span></span>
+          <span>指标类型</span>
+          <span>条数</span>
+          <span>准确率</span>
+          <span>召回率</span>
+          <span>精确率</span>
+          <span>F1</span>
+          <span>相似度</span>
+        </TableHead>
+        {selectedNode.children.map((child) => (
+          <TableRow key={child.id} cols={COL_STYLES.typeList} onClick={() => onSelectNode(child)}>
+            <TypeDot type={child.label} />
+            <span style={{ fontWeight: 500, color: '#1e40af' }}>{child.label} ›</span>
+            <span style={{ color: '#64748b' }}>{child.metrics.totalCount}</span>
+            <MetricsBadge value={child.metrics.accuracy} />
+            <MetricsBadge value={child.metrics.recall} />
+            <MetricsBadge value={child.metrics.precision} />
+            <MetricsBadge value={child.metrics.f1} />
+            <span style={{ color: simColor(child.metrics.avgSimilarity) }}>{child.metrics.avgSimilarity}%</span>
+          </TableRow>
+        ))}
+      </div>
+    );
+  }
+
+  // ── 按指标类型：类型节点 → 显示该类型的所有报告 ──────────────────────────────
+  if (section === 'per-type' && level === 'type') {
+    return (
+      <div>
+        <TableHead cols={COL_STYLES.reportList}>
+          <span>报告</span>
+          <span>条数</span>
+          <span>准确率</span>
+          <span>召回率</span>
+          <span>精确率</span>
+          <span>F1</span>
+          <span>相似度</span>
+        </TableHead>
+        {selectedNode.children.map((child) => (
+          <TableRow key={child.id} cols={COL_STYLES.reportList} onClick={() => onSelectNode(child)}>
+            <Tooltip label={child.label}><span style={{ ...ELLIPSIS_STYLE, fontWeight: 500, color: '#1e40af' }}>{child.label} ›</span></Tooltip>
+            <span style={{ color: '#64748b' }}>{child.metrics.totalCount}</span>
+            <MetricsBadge value={child.metrics.accuracy} />
+            <MetricsBadge value={child.metrics.recall} />
+            <MetricsBadge value={child.metrics.precision} />
+            <MetricsBadge value={child.metrics.f1} />
+            <span style={{ color: simColor(child.metrics.avgSimilarity) }}>{child.metrics.avgSimilarity}%</span>
+          </TableRow>
+        ))}
+      </div>
+    );
+  }
+
+  // ── 按指标类型：报告节点 → 显示该报告的所有指标 ──────────────────────────────
+  if (section === 'per-type' && level === 'typeReport') {
+    const sortedChildren = sortConfig.field ? [...selectedNode.children].sort((a, b) => {
+      const aVal = a.metrics[sortConfig.field] ?? -Infinity;
+      const bVal = b.metrics[sortConfig.field] ?? -Infinity;
+      return sortConfig.order === 'asc' ? aVal - bVal : bVal - aVal;
+    }) : selectedNode.children;
+
+    return (
+      <div>
+        <TableHead cols={COL_STYLES.indListNoConsist}>
+          <SortableHeader label="指标" field="label" sortConfig={sortConfig} onSort={onSortChange} />
+          <SortableHeader label="准确率" field="accuracy" sortConfig={sortConfig} onSort={onSortChange} />
+          <SortableHeader label="召回率" field="recall" sortConfig={sortConfig} onSort={onSortChange} />
+          <SortableHeader label="精确率" field="precision" sortConfig={sortConfig} onSort={onSortChange} />
+          <SortableHeader label="F1" field="f1" sortConfig={sortConfig} onSort={onSortChange} />
+          <SortableHeader label="相似度" field="avgSimilarity" sortConfig={sortConfig} onSort={onSortChange} />
+        </TableHead>
+        {sortedChildren.map((child) => {
+          const isHallucination = child.rows.every(r => r.match_status === '幻觉');
+          if (isHallucination && !includeHallucination) return null;
+          const displayLabel = isHallucination
+            ? `🔴 过摘录 | ${child.rows[0]?.indicator_code || ''} ${child.rows[0]?.llm_indicator_name || child.rows[0]?.indicator_name || ''}`
+            : child.label;
+          return (
+            <TableRow key={child.id} cols={COL_STYLES.indListNoConsist} onClick={() => onSelectNode(child)}>
+              <Tooltip label={displayLabel}><span style={{ ...ELLIPSIS_STYLE, fontWeight: 500, color: '#1e40af' }}>{displayLabel} ›</span></Tooltip>
+              <MetricsBadge value={child.metrics.accuracy} />
+              <MetricsBadge value={child.metrics.recall} />
+              <MetricsBadge value={child.metrics.precision} />
+              <MetricsBadge value={child.metrics.f1} />
+              <span style={{ color: simColor(child.metrics.avgSimilarity) }}>{child.metrics.avgSimilarity}%</span>
+            </TableRow>
+          );
+        })}
+      </div>
+    );
+  }
+
+  // ── 按指标类型：指标节点 → 显示原始数据行 ──────────────────────────────────
+  if (section === 'per-type' && level === 'typeIndicator') {
+    const yearMap = new Map();
+    for (const row of selectedNode.rows) {
+      const year = String(row.data_year || '').trim() || '未知年份';
+      if (!yearMap.has(year)) yearMap.set(year, []);
+      yearMap.get(year).push(row);
+    }
+    const yearEntries = Array.from(yearMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
+    const vt = normalizeValueType(selectedNode.rows[0]?.value_type_1 || selectedNode.rows[0]?.value_type);
+
+    return (
+      <div>
+        {yearEntries.map(([year, rows]) => (
+          <div key={year} style={{ marginBottom: 16 }}>
+            <div style={{ padding: '6px 12px', background: '#f1f5f9', fontSize: 12, fontWeight: 600, color: '#1e40af', marginBottom: 8 }}>
+              {year}
+            </div>
+            {rows.map((row, i) => {
+              // 不统计过摘录时，跳过幻觉行
+              if (row.match_status === '幻觉' && !includeHallucination) return null;
+
+              const hasCurrency = (row.currency || '').trim();
+              const avgSim = row.similarity ?? 0;
+              return (
+                <div key={i} style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 100px', gap: 12, padding: '10px 12px', borderBottom: '1px solid #e2e8f0', fontSize: 11, alignItems: 'start' }}>
+                  <div>
+                    <div style={{ color: '#64748b', fontSize: 10, marginBottom: 6, fontWeight: 600 }}>测试集</div>
+                    <FieldWithSim label="页码" val1={row.pdf_numbers} val2={row.llm_pdf_numbers} fieldType="exact" />
+                    {vt === '文字型' && <FieldWithSim label="值" val1={row.text_value} val2={row.llm_text_value} fieldType="text" showHighlight={true} useLlmBased={useLlmBased} llmSim={row.llm_based_similarity ?? 0} />}
+                    {vt === '数值型' && (<><FieldWithSim label="值" val1={row.num_value} val2={row.llm_num_value} fieldType="numeric" /><FieldWithSim label="单位" val1={row.unit} val2={row.llm_unit} fieldType="exact" />{hasCurrency && <FieldWithSim label="货币" val1={row.currency} val2={row.llm_currency} fieldType="exact" />}</>)}
+                    {vt === '强度型' && (<><FieldWithSim label="值" val1={row.num_value} val2={row.llm_num_value} fieldType="numeric" /><FieldWithSim label="单位" val1={row.unit} val2={row.llm_unit} fieldType="exact" /><FieldWithSim label="分子单位" val1={row.numerator_unit} val2={row.llm_numerator_unit} fieldType="exact" /><FieldWithSim label="分母单位" val1={row.denominator_unit} val2={row.llm_denominator_unit} fieldType="exact" /></>)}
+                    {vt === '货币型' && (<><FieldWithSim label="值" val1={row.num_value} val2={row.llm_num_value} fieldType="numeric" /><FieldWithSim label="单位" val1={row.unit} val2={row.llm_unit} fieldType="exact" /></>)}
+                  </div>
+                  <div>
+                    <div style={{ color: '#64748b', fontSize: 10, marginBottom: 6, fontWeight: 600 }}>LLM</div>
+                    <FieldWithSim label="页码" val1={row.llm_pdf_numbers} val2={row.pdf_numbers} fieldType="exact" />
+                    {vt === '文字型' && <FieldWithSim label="值" val1={row.llm_text_value} val2={row.text_value} fieldType="text" showHighlight={true} useLlmBased={useLlmBased} llmSim={row.llm_based_similarity ?? 0} />}
+                    {vt === '数值型' && (<><FieldWithSim label="值" val1={row.llm_num_value} val2={row.num_value} fieldType="numeric" /><FieldWithSim label="单位" val1={row.llm_unit} val2={row.unit} fieldType="exact" />{hasCurrency && <FieldWithSim label="货币" val1={row.llm_currency} val2={row.currency} fieldType="exact" />}</>)}
+                    {vt === '强度型' && (<><FieldWithSim label="值" val1={row.llm_num_value} val2={row.num_value} fieldType="numeric" /><FieldWithSim label="单位" val1={row.llm_unit} val2={row.unit} fieldType="exact" /><FieldWithSim label="分子单位" val1={row.llm_numerator_unit} val2={row.numerator_unit} fieldType="exact" /><FieldWithSim label="分母单位" val1={row.llm_denominator_unit} val2={row.denominator_unit} fieldType="exact" /></>)}
+                    {vt === '货币型' && (<><FieldWithSim label="值" val1={row.llm_num_value} val2={row.num_value} fieldType="numeric" /><FieldWithSim label="单位" val1={row.llm_unit} val2={row.unit} fieldType="exact" /></>)}
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                    <Badge size="xs" color={row.match_status === '幻觉' ? 'grape' : row.match_status === '未匹配' ? 'red' : avgSim >= 70 ? 'green' : 'yellow'} style={{ marginBottom: 4 }}>
+                      {row.match_status}
+                    </Badge>
+                    <div style={{ fontSize: 9, color: '#64748b', fontWeight: 600 }}>相似度</div>
+                    <div style={{ fontSize: 16, fontWeight: 700, color: simColor(avgSim) }}>{avgSim}%</div>
                   </div>
                 </div>
               );
@@ -868,6 +1007,7 @@ export function UnifiedAnalysisTree({
   const [expandedIds, setExpandedIds] = useState(new Set(['all']));
   const [optimizeModalOpen, setOptimizeModalOpen] = useState(false);
   const [useLlmBased, setUseLlmBased] = useState(false);
+  const [includeHallucination, setIncludeHallucination] = useState(true);
   const [inputValue, setInputValue] = useState(threshold);
   const [sortConfig, setSortConfig] = useState({ field: null, order: 'asc' });
   const [selectedYears, setSelectedYears] = useState([]);
@@ -880,6 +1020,11 @@ export function UnifiedAnalysisTree({
     for (const row of comparisonRows) {
       const year = String(row.data_year || '').trim();
       if (year) years.add(year);
+      // 幻觉行也提取 llm_year
+      if (row.match_status === '幻觉') {
+        const llmYear = String(row.llm_year || '').trim();
+        if (llmYear) years.add(llmYear);
+      }
     }
     return Array.from(years).sort();
   }, [comparisonRows]);
@@ -904,10 +1049,10 @@ export function UnifiedAnalysisTree({
     });
   }, [comparisonRows, selectedYears]);
 
-  // 构建树数据（threshold 或 useLlmBased 变化时重算）
+  // 构建树数据（threshold 或 useLlmBased 或 includeHallucination 变化时重算）
   const treeData = useMemo(
-    () => buildTreeData(filteredRows, threshold, useLlmBased),
-    [filteredRows, threshold, useLlmBased]
+    () => buildTreeData(filteredRows, threshold, useLlmBased, includeHallucination),
+    [filteredRows, threshold, useLlmBased, includeHallucination]
   );
 
   // 所有树节点的平铺查找
@@ -916,6 +1061,8 @@ export function UnifiedAnalysisTree({
     if (fromCross) return fromCross;
     const fromPerReport = findNode(treeData.perReportRoot, id);
     if (fromPerReport) return fromPerReport;
+    const fromPerType = findNode(treeData.perTypeRoot, id);
+    if (fromPerType) return fromPerType;
     return null;
   }, [treeData]);
 
@@ -928,11 +1075,28 @@ export function UnifiedAnalysisTree({
     if (fromCross) return fromCross;
     const fromPerReport = findPath(treeData.perReportRoot, selectedId);
     if (fromPerReport) return fromPerReport;
+    const fromPerType = findPath(treeData.perTypeRoot, selectedId);
+    if (fromPerType) return fromPerType;
     return [];
   }, [selectedId, treeData]);
 
   const handleSelect = useCallback((node) => {
     setSelectedId(node.id);
+    // 添加到浏览器历史记录
+    window.history.pushState({ nodeId: node.id }, '', `#${node.id}`);
+  }, []);
+
+  // 监听浏览器返回按钮
+  useEffect(() => {
+    const handlePopState = (event) => {
+      if (event.state?.nodeId) {
+        setSelectedId(event.state.nodeId);
+      } else {
+        setSelectedId('all');
+      }
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
   const handleToggle = useCallback((id) => {
@@ -1032,13 +1196,60 @@ export function UnifiedAnalysisTree({
       };
     });
 
+    // Sheet 4: 指标维度统计（不含幻觉）
+    const rowsNoHall = filteredRows.filter(r => r.match_status !== '幻觉');
+    const indicatorMapNoHall = new Map();
+    for (const row of rowsNoHall) {
+      const key = `${row.indicator_code}_${row.indicator_name}`;
+      if (!indicatorMapNoHall.has(key)) indicatorMapNoHall.set(key, []);
+      indicatorMapNoHall.get(key).push(row);
+    }
+    const indicatorStatsNoHall = Array.from(indicatorMapNoHall.entries()).map(([key, rows]) => {
+      const [code, name] = key.split('_');
+      const metrics = calculateOverallMetrics(rows, threshold);
+      return {
+        指标代码: code,
+        指标名称: name,
+        数据条数: rows.length,
+        准确率: metrics.accuracy !== null ? Math.round(metrics.accuracy * 100) + '%' : '',
+        召回率: metrics.recall !== null ? Math.round(metrics.recall * 100) + '%' : '',
+        精确率: metrics.precision !== null ? Math.round(metrics.precision * 100) + '%' : '',
+        F1分数: metrics.f1 !== null ? Math.round(metrics.f1 * 100) + '%' : '',
+        平均相似度: metrics.avgSimilarity + '%'
+      };
+    });
+
+    // Sheet 5: 报告维度统计（不含幻觉）
+    const reportMapNoHall = new Map();
+    for (const row of rowsNoHall) {
+      const rpt = row.report_name || '';
+      if (!reportMapNoHall.has(rpt)) reportMapNoHall.set(rpt, []);
+      reportMapNoHall.get(rpt).push(row);
+    }
+    const reportStatsNoHall = Array.from(reportMapNoHall.entries()).map(([rpt, rows]) => {
+      const metrics = calculateOverallMetrics(rows, threshold);
+      return {
+        报告名称: rpt,
+        数据条数: rows.length,
+        准确率: metrics.accuracy !== null ? Math.round(metrics.accuracy * 100) + '%' : '',
+        召回率: metrics.recall !== null ? Math.round(metrics.recall * 100) + '%' : '',
+        精确率: metrics.precision !== null ? Math.round(metrics.precision * 100) + '%' : '',
+        F1分数: metrics.f1 !== null ? Math.round(metrics.f1 * 100) + '%' : '',
+        平均相似度: metrics.avgSimilarity + '%'
+      };
+    });
+
     const wb = XLSX.utils.book_new();
     const ws1 = XLSX.utils.json_to_sheet(exportData);
     const ws2 = XLSX.utils.json_to_sheet(indicatorStats);
     const ws3 = XLSX.utils.json_to_sheet(reportStats);
+    const ws4 = XLSX.utils.json_to_sheet(indicatorStatsNoHall);
+    const ws5 = XLSX.utils.json_to_sheet(reportStatsNoHall);
     XLSX.utils.book_append_sheet(wb, ws1, '明细数据');
-    XLSX.utils.book_append_sheet(wb, ws2, '指标维度统计');
-    XLSX.utils.book_append_sheet(wb, ws3, '报告维度统计');
+    XLSX.utils.book_append_sheet(wb, ws2, '指标维度统计（含幻觉）');
+    XLSX.utils.book_append_sheet(wb, ws3, '报告维度统计（含幻觉）');
+    XLSX.utils.book_append_sheet(wb, ws4, '指标维度统计（不含幻觉）');
+    XLSX.utils.book_append_sheet(wb, ws5, '报告维度统计（不含幻觉）');
     XLSX.writeFile(wb, fileName);
   }, [filteredRows, threshold, useLlmBased]);
 
@@ -1153,6 +1364,13 @@ export function UnifiedAnalysisTree({
           </Popover.Dropdown>
         </Popover>
 
+        <Switch
+          label="统计过摘录指标"
+          checked={includeHallucination}
+          onChange={(e) => setIncludeHallucination(e.currentTarget.checked)}
+          size="sm"
+        />
+
         <Button
           size="sm"
           variant="light"
@@ -1246,6 +1464,19 @@ export function UnifiedAnalysisTree({
             expandedIds={expandedIds}
             onToggle={handleToggle}
           />
+
+          {/* 文字型/数值型/强度型直接放在按报告视角下 */}
+          {treeData.perTypeRoot.children.map((typeNode) => (
+            <TreeItem
+              key={typeNode.id}
+              node={typeNode}
+              depth={0}
+              selectedId={selectedId}
+              onSelect={handleSelect}
+              expandedIds={expandedIds}
+              onToggle={handleToggle}
+            />
+          ))}
         </div>
 
         {/* 右侧 */}
@@ -1260,6 +1491,7 @@ export function UnifiedAnalysisTree({
               sortConfig={sortConfig}
               onSortChange={(field, order) => setSortConfig({ field, order })}
               useLlmBased={useLlmBased}
+              includeHallucination={includeHallucination}
               onSelectNode={(node) => {
                 setSelectedId(node.id);
                 setExpandedIds((prev) => new Set([...prev, node.id]));

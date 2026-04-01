@@ -46,8 +46,9 @@ export function calculateFieldSimilarity(val1, val2, fieldType = 'text', useLlmB
 
   // 数值型：转换为数字比较，只返回0或100
   if (fieldType === 'numeric') {
-    const n1 = parseFloat(v1);
-    const n2 = parseFloat(v2);
+    // 移除千分位逗号
+    const n1 = parseFloat(v1.replace(/,/g, ''));
+    const n2 = parseFloat(v2.replace(/,/g, ''));
     if (!isNaN(n1) && !isNaN(n2)) {
       return n1 === n2 ? 100 : 0;
     }

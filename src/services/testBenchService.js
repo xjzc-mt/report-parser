@@ -4,6 +4,7 @@ import { normalizeValueType, getResultsArray } from '../utils/extraction.js';
 import { PROMPT_OPTIMIZER_SYSTEM_PROMPT, VALUE_TYPE_EN_TO_ZH } from '../constants/testBench.js';
 import { parsePdfNumbers, extractPdfPages, uint8ArrayToBase64 } from './pdfPageExtractor.js';
 import { NOT_FOUND_VALUE } from '../constants/extraction.js';
+import { calculateFieldSimilarity } from './synonymService.js';
 import {
   appendResults,
   getAllResults,
@@ -202,22 +203,39 @@ function subGroupByValueType(rows) {
 function buildTestUserPrompt(indicators, definitionMap = null) {
   const list = indicators
     .map((ind, i) => {
-      let instruction;
+      let instruction = null;
+      const indicatorCode = String(ind.indicator_code || '').trim();
+      const indicatorName = ind.indicator_name || '未知指标';
+
       if (definitionMap) {
-        const def = definitionMap.get(String(ind.indicator_code || '').trim());
+        const def = definitionMap.get(indicatorCode);
         if (def) {
-          const parts = [];
-          if (def.definition) parts.push(`指标定义：${def.definition}`);
-          if (def.guidance) parts.push(`摘录规则：${def.guidance}`);
-          if (def.prompt) parts.push(`摘录Prompt：${def.prompt}`);
-          instruction = parts.length > 0 ? parts.join(' ') : (ind.prompt || ind.indicator_name);
+          if (def.prompt) {
+            instruction = def.prompt;
+          } else {
+            const parts = [];
+            if (def.definition) parts.push(`指标定义：${def.definition}`);
+            if (def.guidance) parts.push(`摘录规则：${def.guidance}`);
+            
+            if (parts.length > 0) {
+              instruction = parts.join(' ');
+            } else {
+              instruction = ind.prompt || null;
+            }
+          }
         } else {
-          instruction = ind.prompt || ind.indicator_name;
+          instruction = ind.prompt || null;
         }
       } else {
-        instruction = ind.prompt || ind.indicator_name;
+        instruction = ind.prompt || null;
       }
-      return `${i + 1}. Indicator Code: "${ind.indicator_code}"\n   Indicator Name: "${ind.indicator_name}"\n   Extraction Instructions: "${instruction}"`;
+
+      // 最终校验：如果没有任何提取指令，则抛出错误
+      if (!instruction || String(instruction).trim() === '') {
+        throw new Error(`指标 [${indicatorCode}: ${indicatorName}] 缺少提取提示词 (Prompt)。\n请确保“指标定义文件”中有 prompt 字段，或“测试集 Excel”中有 prompt 列。`);
+      }
+
+      return `${i + 1}. Indicator Code: "${indicatorCode}"\n   Indicator Name: "${indicatorName}"\n   Extraction Instructions: "${instruction}"`;
     })
     .join('\n\n');
   return `Please extract the following ${indicators.length} ESG indicators from the provided PDF report:\n\n${list}\n\nReturn results in the JSON format specified in the system prompt.\nFor each indicator, use the EXACT indicator_code provided above.\nIf an indicator cannot be found, use "${NOT_FOUND_VALUE}" as the value.`;
@@ -296,13 +314,38 @@ function joinTestSetWithLlm1(testSetRows, llm1Results) {
     } else {
       for (const llmRow of matched) {
         const textSim = fieldSim(testRow.text_value, llmRow.text_value);
-        const numSim = fieldSim(testRow.num_value, llmRow.num_value);
-        const unitSim = fieldSim(testRow.unit, llmRow.unit);
-        const currencySim = fieldSim(testRow.currency, llmRow.currency);
-        const numeratorSim = fieldSim(testRow.numerator_unit, llmRow.numerator_unit);
-        const denominatorSim = fieldSim(testRow.denominator_unit, llmRow.denominator_unit);
-        // 主相似度 = 所有适用字段（双端非空）的平均
-        const similarity = avgFieldSims(textSim, numSim, unitSim, currencySim, numeratorSim, denominatorSim) ?? 0;
+        const pdfSim = calculateFieldSimilarity(testRow.pdf_numbers, llmRow.pdf_numbers, 'exact');
+        const numSim = isEmptyOrNotFound(testRow.num_value) && isEmptyOrNotFound(llmRow.num_value) ? null : calculateFieldSimilarity(testRow.num_value, llmRow.num_value, 'numeric');
+        const unitSim = isEmptyOrNotFound(testRow.unit) && isEmptyOrNotFound(llmRow.unit) ? null : calculateFieldSimilarity(testRow.unit, llmRow.unit, 'exact');
+        const currencySim = isEmptyOrNotFound(testRow.currency) && isEmptyOrNotFound(llmRow.currency) ? null : calculateFieldSimilarity(testRow.currency, llmRow.currency, 'exact');
+        const numeratorSim = isEmptyOrNotFound(testRow.numerator_unit) && isEmptyOrNotFound(llmRow.numerator_unit) ? null : calculateFieldSimilarity(testRow.numerator_unit, llmRow.numerator_unit, 'exact');
+        const denominatorSim = isEmptyOrNotFound(testRow.denominator_unit) && isEmptyOrNotFound(llmRow.denominator_unit) ? null : calculateFieldSimilarity(testRow.denominator_unit, llmRow.denominator_unit, 'exact');
+
+        // 使用加权平均计算相似度（与页面显示逻辑一致）
+        let similarity = 0;
+        const vt = getValueTypeZh(testRow);
+        const hasCurrency = !isEmptyOrNotFound(testRow.currency) || !isEmptyOrNotFound(llmRow.currency);
+
+        if (vt === '文字型') {
+          similarity = Math.round((pdfSim || 0) * 0.05 + (textSim || 0) * 0.95);
+        } else if (vt === '数值型') {
+          if (hasCurrency) {
+            // 数值 80%, 货币 10%, 单位 5%, 页码 5%
+            similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.8 + (unitSim || 0) * 0.05 + (currencySim || 0) * 0.1);
+          } else {
+            // 数值 85%, 单位 10%, 页码 5%
+            similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.85 + (unitSim || 0) * 0.1);
+          }
+        } else if (vt === '强度型') {
+          // 数值 80%, 单位 10%, 分子/分母各 2.5%, 页码 5%
+          similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.8 + (unitSim || 0) * 0.1 + (numeratorSim || 0) * 0.025 + (denominatorSim || 0) * 0.025);
+        } else if (vt === '货币型') {
+          // 数值 85%, 单位 10%, 页码 5%
+          similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.85 + (unitSim || 0) * 0.1);
+        } else {
+          // 默认：简单平均
+          similarity = avgFieldSims(textSim, numSim, unitSim, currencySim, numeratorSim, denominatorSim) ?? 0;
+        }
 
         // 基于 LLM 的相似度（反向计算）
         const textLlmSim = isEmptyOrNotFound(testRow.text_value) && isEmptyOrNotFound(llmRow.text_value) ? null : calculateLlmBasedSimilarity(testRow.text_value, llmRow.text_value);
@@ -332,7 +375,110 @@ function joinTestSetWithLlm1(testSetRows, llm1Results) {
       }
     }
   }
-  return comparisonRows;
+
+  // ── 追加幻觉行：LLM 输出了但测试集里没有对应 key 的结果 ──────────────────
+  // 构建测试集 key 集合（report_name + indicator_code + data_year）
+  const testKeySet = new Set(
+    testSetRows.map((r) => `${r.report_name}|||${String(r.indicator_code || '').trim()}|||${String(r.data_year || '').trim()}`)
+  );
+
+  let hallucinationCount = 0;
+  for (const llmRow of llm1Results) {
+    const key = `${llmRow.report_name}|||${String(llmRow.indicator_code || '').trim()}|||${String(llmRow.year || '').trim()}`;
+    if (testKeySet.has(key)) continue; // 测试集有对应行，已经在上面 join 过了
+    // 忽略空输出
+    const hasVal = !isEmptyOrNotFound(llmRow.text_value) || !isEmptyOrNotFound(llmRow.num_value);
+    if (!hasVal) continue;
+
+    hallucinationCount++;
+
+    // 转换英文类型到中文
+    const typeMap = {
+      'TEXT': '文字型',
+      'NUMERIC': '数值型',
+      'INTENSITY': '强度型',
+      'CURRENCY': '数值型'  // 货币型转换为数值型
+    };
+
+    // 优先使用文件中的 value_type，否则推断
+    let valueType = llmRow.value_type || '';
+    if (valueType) {
+      const upper = valueType.toUpperCase();
+      valueType = typeMap[upper] || valueType;
+      // 货币型也转换为数值型
+      if (valueType === '货币型') valueType = '数值型';
+    } else {
+      if (llmRow.num_value && String(llmRow.num_value).trim() && String(llmRow.num_value).trim() !== NOT_FOUND_VALUE) {
+        if (llmRow.currency && String(llmRow.currency).trim()) {
+          valueType = '货币型';
+        } else if (llmRow.numerator_unit || llmRow.denominator_unit) {
+          valueType = '强度型';
+        } else {
+          valueType = '数值型';
+        }
+      } else {
+        valueType = '文字型';
+      }
+    }
+
+    comparisonRows.push({
+      // 从 LLM 结果填充基本字段
+      report_name: llmRow.report_name,
+      indicator_code: String(llmRow.indicator_code || '').trim(),
+      indicator_name: llmRow.indicator_name || String(llmRow.indicator_code || '').trim() || '未知指标',
+      data_year: llmRow.year || '',
+      value_type: valueType,
+      value_type_1: valueType,
+      // 测试集字段全空（没有标准答案）
+      text_value: '',
+      num_value: '',
+      unit: '',
+      currency: '',
+      numerator_unit: '',
+      denominator_unit: '',
+      pdf_numbers: '',
+      prompt: '',
+      // LLM 输出字段
+      match_status: '幻觉',
+      similarity: 0,
+      llm_based_similarity: 0,
+      llm_indicator_name: llmRow.indicator_name || '',
+      llm_year: llmRow.year || '',
+      llm_text_value: llmRow.text_value || '',
+      llm_num_value: llmRow.num_value || '',
+      llm_unit: llmRow.unit || '',
+      llm_currency: llmRow.currency || '',
+      llm_numerator_unit: llmRow.numerator_unit || '',
+      llm_denominator_unit: llmRow.denominator_unit || '',
+      llm_pdf_numbers: llmRow.pdf_numbers || '',
+      unit_similarity: null,
+      currency_similarity: null,
+      numerator_unit_similarity: null,
+      denominator_unit_similarity: null,
+      improved_prompt: '',
+      improvement_reason: ''
+    });
+  }
+
+  console.log(`[joinTestSetWithLlm1] 追加了 ${hallucinationCount} 条幻觉行`);
+
+  // ── 数据清洗：分离有效和无效数据 ──────────────────────────────────────────
+  const validRows = [];
+  const invalidRows = [];
+
+  for (const row of comparisonRows) {
+    const year = String(row.data_year || '').trim();
+    const isValidYear = /^(19|20)\d{2}$/.test(year);
+
+    if (isValidYear || !year) {
+      validRows.push(row);
+    } else {
+      invalidRows.push({ ...row, invalid_reason: '年份格式错误' });
+    }
+  }
+
+  console.log(`[数据清洗] 有效: ${validRows.length}, 无效: ${invalidRows.length}`);
+  return { validRows, invalidRows };
 }
 
 // ── 阶段一：LLM 1 提取 ───────────────────────────────────────────────────────
@@ -348,6 +494,20 @@ function joinTestSetWithLlm1(testSetRows, llm1Results) {
  * @param {Function} params.onExLog     - (logEntry) 提取日志专用回调
  * @param {string}   [params.runId]     - 当前运行 ID
  * @param {Object}   [params.tokenStats] - token 统计对象（会被修改）
+ */
+/**
+ * 运行阶段一：LLM 1 指标提取
+ * 
+ * @param {Object}   params
+ * @param {File[]}   params.pdfFiles    - PDF 文件列表。需匹配测试集 report_name。
+ * @param {File}     params.testSetFile - 测试集 Excel。
+ *   必填字段：report_name, pdf_numbers, indicator_code, data_year, value_type_1, text_value, prompt。
+ * @param {Object}   params.llm1Settings - 模型设置
+ * @param {Function} params.onProgress   - 进度回调
+ * @param {Function} params.onExLog      - 提取日志回调
+ * @param {string}   [params.runId]      - 运行 ID
+ * @param {Object}   [params.tokenStats]  - token 统计
+ * @param {Map}      [params.definitionMap] - 指标定义映射。只需包含 indicator_code 和 prompt 即可正常运行（该 prompt 具有最高优先级）。
  */
 export async function runExtractionPhase({
   pdfFiles,
@@ -383,20 +543,25 @@ export async function runExtractionPhase({
   let testSetRows = await parseExcel(testSetFile);
   log(`测试集解析完成，共 ${testSetRows.length} 条指标`);
 
-  // 若有定义文件，将拼接后的 prompt 写入每行，使 original_prompt 列反映实际使用的提取指令
+  // 若有定义文件，则仅提取定义文件中存在的指标
   if (definitionMap && definitionMap.size > 0) {
-    testSetRows = testSetRows.map((row) => {
-      const def = definitionMap.get(String(row.indicator_code || '').trim());
-      if (!def) return row;
-      const parts = [];
-      if (def.definition) parts.push(`指标定义：${def.definition}`);
-      if (def.guidance) parts.push(`摘录规则：${def.guidance}`);
-      if (def.prompt) parts.push(`摘录Prompt：${def.prompt}`);
-      const updated = { ...row };
-      if (parts.length > 0) updated.prompt = parts.join(' ');
-      if (def.value_type_1 && !row.value_type_1) updated.value_type_1 = def.value_type_1;
-      return updated;
-    });
+    const originalCount = testSetRows.length;
+    testSetRows = testSetRows
+      .filter((row) => definitionMap.has(String(row.indicator_code || '').trim()))
+      .map((row) => {
+        const def = definitionMap.get(String(row.indicator_code || '').trim());
+        const updated = { ...row };
+        if (def.prompt) updated.prompt = def.prompt;
+        if (def.value_type_1 && !row.value_type_1) updated.value_type_1 = def.value_type_1;
+        return updated;
+      });
+    
+    const filteredCount = originalCount - testSetRows.length;
+    if (filteredCount > 0) {
+      log(`⚠️ 已过滤掉 ${filteredCount} 个不在指标定义文件中的指标，实际待提取指标共 ${testSetRows.length} 条`);
+    } else if (testSetRows.length > 0) {
+      log(`✅ 测试集指标均在定义文件中，共 ${testSetRows.length} 条待提取`);
+    }
   }
 
   const groups = groupByReportAndPages(testSetRows);
@@ -490,8 +655,9 @@ export async function runExtractionPhase({
             const row = {
               report_name: group.report_name,
               indicator_name: original?.indicator_name || result.indicator_name || '',
-              value_type: valueType,
+              llm_indicator_name: result.indicator_name || '',
               ...result,
+              value_type: valueType,
               pdf_numbers: remappedPdfNumbers
             };
             llm1Results.push(row);
@@ -549,7 +715,7 @@ export async function runExtractionPhase({
   const wasInterrupted = !!interruptSignal?.interrupted;
   const statusWord = wasInterrupted ? '已中断' : '完成';
   log(`提取${statusWord}，共 ${llm1Results.length} 条结果，开始生成关联文件...`, 95);
-  const comparisonRows = joinTestSetWithLlm1(testSetRows, llm1Results);
+  const { validRows: comparisonRows, invalidRows } = joinTestSetWithLlm1(testSetRows, llm1Results);
   const matched = comparisonRows.filter((r) => r.match_status !== '未匹配').length;
   log(
     `关联${statusWord}：总 ${comparisonRows.length} 条，已匹配 ${matched} 条，未匹配 ${comparisonRows.length - matched} 条`,
@@ -576,7 +742,7 @@ function buildCrossReportOptimizationPrompt(indicatorCode, indicatorName, curren
       const noAnswer = !hasAnswer;
       const hasLlm = ex.llm_result && ex.llm_result !== '未提取' && ex.llm_result !== NOT_FOUND_VALUE;
       const hint = isNotFound && hasAnswer ? '【疑似TYPE_A：未找到】'
-        : noAnswer && hasLlm ? '【疑似TYPE_D：过摘录】'
+        : noAnswer && hasLlm ? '【TYPE_D：过摘录 - 标准答案为空但LLM给出了值】'
         : (ex.similarity ?? 0) < 30 && hasAnswer ? '【疑似TYPE_B：值错误】'
         : (ex.similarity ?? 0) >= 70 ? '【TYPE_F：提取正确】'
         : '';
@@ -975,6 +1141,75 @@ export async function runOptimizationPhase({
 
 // ── 导出 ─────────────────────────────────────────────────────────────────────
 
+/** 计算指标维度统计 */
+function calculateIndicatorStats(comparisonRows, includeHallucination) {
+  const rows = includeHallucination ? comparisonRows : comparisonRows.filter(r => r.match_status !== '幻觉');
+  const grouped = new Map();
+
+  for (const row of rows) {
+    const code = row.indicator_code || '';
+    if (!grouped.has(code)) {
+      grouped.set(code, { code, name: row.indicator_name || '', rows: [] });
+    }
+    grouped.get(code).rows.push(row);
+  }
+
+  return Array.from(grouped.values()).map(g => {
+    const matched = g.rows.filter(r => r.match_status === '已匹配').length;
+    const unmatched = g.rows.filter(r => r.match_status === '未匹配').length;
+    const hallucination = g.rows.filter(r => r.match_status === '幻觉').length;
+    const multi = g.rows.filter(r => r.match_status === '多结果').length;
+    const sims = g.rows.map(r => r.similarity ?? 0).filter(s => s > 0);
+
+    return {
+      指标代码: g.code,
+      指标名称: g.name,
+      总条数: g.rows.length,
+      已匹配数: matched,
+      未匹配数: unmatched,
+      ...(includeHallucination ? { 幻觉数: hallucination } : {}),
+      多结果数: multi,
+      平均相似度: sims.length ? Math.round(sims.reduce((a, b) => a + b, 0) / sims.length) : 0,
+      最高相似度: sims.length ? Math.max(...sims) : 0,
+      最低相似度: sims.length ? Math.min(...sims) : 0
+    };
+  });
+}
+
+/** 计算报告维度统计 */
+function calculateReportStats(comparisonRows, includeHallucination) {
+  const rows = includeHallucination ? comparisonRows : comparisonRows.filter(r => r.match_status !== '幻觉');
+  const grouped = new Map();
+
+  for (const row of rows) {
+    const name = row.report_name || '';
+    if (!grouped.has(name)) {
+      grouped.set(name, { name, rows: [] });
+    }
+    grouped.get(name).rows.push(row);
+  }
+
+  return Array.from(grouped.values()).map(g => {
+    const matched = g.rows.filter(r => r.match_status === '已匹配').length;
+    const unmatched = g.rows.filter(r => r.match_status === '未匹配').length;
+    const hallucination = g.rows.filter(r => r.match_status === '幻觉').length;
+    const multi = g.rows.filter(r => r.match_status === '多结果').length;
+    const sims = g.rows.map(r => r.similarity ?? 0).filter(s => s > 0);
+
+    return {
+      报告名称: g.name,
+      总条数: g.rows.length,
+      已匹配数: matched,
+      未匹配数: unmatched,
+      ...(includeHallucination ? { 幻觉数: hallucination } : {}),
+      多结果数: multi,
+      平均相似度: sims.length ? Math.round(sims.reduce((a, b) => a + b, 0) / sims.length) : 0,
+      最高相似度: sims.length ? Math.max(...sims) : 0,
+      最低相似度: sims.length ? Math.min(...sims) : 0
+    };
+  });
+}
+
 /** 导出关联后的对比文件（阶段一结果，含相似度，供下载 / 独立优化入口使用） */
 export async function exportComparisonRows(comparisonRows) {
   const XLSX = await import('xlsx');
@@ -1114,8 +1349,24 @@ export async function exportFinalResults(finalRows, tokenStats, iterationDetails
       { 项目: '估算总费用(USD)', 数值: totalCost.toFixed(4) }
     ];
     const statsWs = XLSX.utils.json_to_sheet(statsRows);
-    XLSX.utils.book_append_sheet(wb, statsWs, '统计');
+    XLSX.utils.book_append_sheet(wb, statsWs, 'Token统计');
   }
+
+  // 新增分析统计 Sheet
+  const indicatorStatsWithHall = calculateIndicatorStats(finalRows, true);
+  const indicatorStatsNoHall = calculateIndicatorStats(finalRows, false);
+  const reportStatsWithHall = calculateReportStats(finalRows, true);
+  const reportStatsNoHall = calculateReportStats(finalRows, false);
+
+  const ws3 = XLSX.utils.json_to_sheet(indicatorStatsWithHall);
+  const ws4 = XLSX.utils.json_to_sheet(indicatorStatsNoHall);
+  const ws5 = XLSX.utils.json_to_sheet(reportStatsWithHall);
+  const ws6 = XLSX.utils.json_to_sheet(reportStatsNoHall);
+
+  XLSX.utils.book_append_sheet(wb, ws3, '指标维度统计（含幻觉）');
+  XLSX.utils.book_append_sheet(wb, ws4, '指标维度统计（不含幻觉）');
+  XLSX.utils.book_append_sheet(wb, ws5, '报告维度统计（含幻觉）');
+  XLSX.utils.book_append_sheet(wb, ws6, '报告维度统计（不含幻觉）');
 
   XLSX.writeFile(wb, `testbench_final_${ts}.xlsx`);
 }
@@ -1210,6 +1461,8 @@ export async function parseLlmResultsFile(file) {
   return rows.map((r) => ({
     report_name: String(r.report_name || '').trim(),
     indicator_code: String(r.indicator_code || '').trim(),
+    indicator_name: String(r.indicator_name || '').trim(),
+    value_type: String(r.value_type || '').trim(),
     year: String(r.year || r.data_year || '').trim(),
     text_value: String(r.text_value || '').trim(),
     num_value: String(r.num_value || '').trim(),
@@ -1223,7 +1476,8 @@ export async function parseLlmResultsFile(file) {
 
 /** 将上传的 LLM 结果与测试集关联（快速验收模式） */
 export function joinLlmResultsWithTestSet(llmResults, testSetRows) {
-  return joinTestSetWithLlm1(testSetRows, llmResults);
+  const { validRows, invalidRows } = joinTestSetWithLlm1(testSetRows, llmResults);
+  return { validRows, invalidRows };
 }
 
 /** 检查 PDF 匹配情况（快速优化模式） */

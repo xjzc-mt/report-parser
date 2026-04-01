@@ -12,24 +12,31 @@ function hasGroundTruth(row) {
   return (t && t !== NOT_FOUND) || (n && n !== NOT_FOUND && n !== '');
 }
 
-function calculateMetrics(rows, similarityThreshold = 70, useLlmBasedSimilarity = false) {
-  const total = rows.length;
+function calculateMetrics(rows, similarityThreshold = 70, useLlmBasedSimilarity = false, includeHallucination = true) {
+  // 幻觉开关：关闭时过滤掉幻觉行
+  const filteredRows = includeHallucination ? rows : rows.filter(r => r.match_status !== '幻觉');
+
+  const total = filteredRows.length;
   const th = similarityThreshold;
-  const totalLlmOutput = rows.filter((r) => r.match_status !== '未匹配').length;
+  const totalLlmOutput = filteredRows.filter((r) => r.match_status !== '未匹配').length;
   const simField = useLlmBasedSimilarity ? 'llm_based_similarity' : 'similarity';
-  const TP = rows.filter((r) => r.match_status !== '未匹配' && (r[simField] ?? 0) >= th).length;
-  const FP = rows.filter((r) => hasLlmOutput(r) && !hasGroundTruth(r)).length;
-  const TN = rows.filter((r) => !hasGroundTruth(r) && !hasLlmOutput(r)).length;
+  const TP = filteredRows.filter((r) => r.match_status !== '未匹配' && (r[simField] ?? 0) >= th).length;
+  const FP = filteredRows.filter((r) => hasLlmOutput(r) && !hasGroundTruth(r)).length;
+  const TN = filteredRows.filter((r) => !hasGroundTruth(r) && !hasLlmOutput(r)).length;
+
+  // 召回率：TP / 有标准答案的总数（不受幻觉开关影响）
+  const totalWithGroundTruth = rows.filter(hasGroundTruth).length;
 
   const accuracy = total > 0 ? (TP + TN) / total : null;
   const precision = totalLlmOutput > 0 ? TP / totalLlmOutput : null;
-  const recall = total > 0 ? totalLlmOutput / total : null;
+  const recall = totalWithGroundTruth > 0 ? totalLlmOutput / totalWithGroundTruth : null;
   const f1 = (precision !== null && recall !== null && (precision + recall) > 0)
     ? 2 * precision * recall / (precision + recall)
     : null;
   const overExtractionRate = totalLlmOutput > 0 ? FP / totalLlmOutput : null;
 
-  const matchedRows = rows.filter((r) => r.match_status !== '未匹配');
+  // 计算平均相似度时排除幻觉行（幻觉行 similarity=0 会拉低平均值）
+  const matchedRows = filteredRows.filter((r) => r.match_status !== '未匹配' && r.match_status !== '幻觉');
   const validSims = matchedRows.map((r) => r.similarity).filter((s) => s !== null && s !== undefined);
   const avgSimilarity = validSims.length > 0
     ? Math.round(validSims.reduce((s, v) => s + v, 0) / validSims.length)
@@ -50,16 +57,17 @@ function calculateMetrics(rows, similarityThreshold = 70, useLlmBasedSimilarity 
     precision,
     recall,
     f1,
-    overExtractionRate
+    overExtractionRate,
+    hallucinationCount: rows.filter((r) => r.match_status === '幻觉').length
   };
 }
 
-export function calculateOverallMetrics(comparisonRows, similarityThreshold = 70) {
-  return calculateMetrics(comparisonRows, similarityThreshold, false);
+export function calculateOverallMetrics(comparisonRows, similarityThreshold = 70, includeHallucination = true) {
+  return calculateMetrics(comparisonRows, similarityThreshold, false, includeHallucination);
 }
 
-export function calculateOverallMetricsLlmBased(comparisonRows, similarityThreshold = 70) {
-  return calculateMetrics(comparisonRows, similarityThreshold, true);
+export function calculateOverallMetricsLlmBased(comparisonRows, similarityThreshold = 70, includeHallucination = true) {
+  return calculateMetrics(comparisonRows, similarityThreshold, true, includeHallucination);
 }
 
 export function groupRowsByYear(rows, similarityThreshold = 70) {
@@ -105,7 +113,7 @@ const NOT_FOUND_2 = '未披露';
  * @returns {'perfect'|'pass'|'partial'|'miss'|'hallucination'|'tn'}
  */
 export function classifyRow(row, threshold = 70) {
-  const matched = row.match_status !== '未匹配';
+  const matched = row.match_status !== '未匹配' && row.match_status !== '幻觉';
   const gt = hasGroundTruth(row);
   const llmOut = hasLlmOutput(row);
   const sim = row.similarity ?? 0;
@@ -190,10 +198,29 @@ const VT_ORDER = ['文字型', '数值型', '货币型', '强度型'];
 const VT_EN_MAP = { TEXT: '文字型', NUMERIC: '数值型', INTENSITY: '强度型', CURRENCY: '货币型' };
 
 function getValueTypeZh(row) {
+  // 过摘录行：使用 LLM 的 value_type
+  if (row.match_status === '幻觉') {
+    const llmVt = String(row.value_type || '').trim();
+    return normalizeVT(llmVt || '文字型');
+  }
+  // 正常行：使用测试集的 value_type
   const zh = String(row.value_type_1 || '').trim();
   if (zh) return normalizeVT(zh);
   const en = String(row.value_type || '').trim().toUpperCase();
   return normalizeVT(VT_EN_MAP[en] || '文字型');
+}
+
+function getIndicatorCode(row) {
+  return String(row.indicator_code || '').trim();
+}
+
+function getIndicatorName(row) {
+  // 过摘录行：使用 LLM 的 indicator_name
+  if (row.match_status === '幻觉') {
+    return String(row.llm_indicator_name || row.indicator_name || '').trim();
+  }
+  // 正常行：使用测试集的 indicator_name
+  return String(row.indicator_name || '').trim();
 }
 
 function normalizeVT(zh) {
@@ -204,18 +231,27 @@ function normalizeVT(zh) {
   return zh;
 }
 
-function computeNodeMetrics(rows, threshold, consistencyEntry = null, useLlmBased = false) {
-  const m = calculateMetrics(rows, threshold, useLlmBased);
+function computeNodeMetrics(rows, threshold, consistencyEntry = null, useLlmBased = false, includeHallucination = true) {
+  const m = calculateMetrics(rows, threshold, useLlmBased, includeHallucination);
   const metrics = {
     totalCount: m.totalCount,
-    matchedCount: m.matchedCount,
+    positiveCount: m.positiveCount,
+    negativeCount: m.negativeCount,
+    predictedPositiveCount: m.predictedPositiveCount,
+    TP: m.TP,
+    FP: m.FP,
+    FN: m.FN,
+    TN: m.TN,
     accuracy: m.accuracy,
     recall: m.recall,
     precision: m.precision,
     f1: m.f1,
+    fpr: m.fpr,
+    redundancy: m.redundancy,
     exactMatchRate: calculateExactMatchRate(rows),
     avgSimilarity: m.avgSimilarity,
     avgLlmBasedSimilarity: m.avgLlmBasedSimilarity,
+    hallucinationCount: m.hallucinationCount,
     errorBreakdown: calculateErrorTypeBreakdown(rows, threshold)
   };
   if (consistencyEntry !== null) {
@@ -225,7 +261,7 @@ function computeNodeMetrics(rows, threshold, consistencyEntry = null, useLlmBase
   return metrics;
 }
 
-function makeNode(id, section, level, label, rows, children, threshold, consistencyEntry = null, useLlmBased = false) {
+function makeNode(id, section, level, label, rows, children, threshold, consistencyEntry = null, useLlmBased = false, includeHallucination = true) {
   return {
     id,
     section,
@@ -233,7 +269,7 @@ function makeNode(id, section, level, label, rows, children, threshold, consiste
     label,
     rows,
     children,
-    metrics: computeNodeMetrics(rows, threshold, consistencyEntry, useLlmBased)
+    metrics: computeNodeMetrics(rows, threshold, consistencyEntry, useLlmBased, includeHallucination)
   };
 }
 
@@ -242,9 +278,10 @@ function makeNode(id, section, level, label, rows, children, threshold, consiste
  * @param {object[]} comparisonRows
  * @param {number} threshold 0-100（用于指标分类和稳定性计算）
  * @param {boolean} useLlmBased 是否使用 llm_based_similarity
- * @returns {{ crossReportRoot: TreeNode, perReportRoot: TreeNode }}
+ * @param {boolean} includeHallucination 是否统计幻觉指标
+ * @returns {{ crossReportRoot: TreeNode, perReportRoot: TreeNode, perTypeRoot: TreeNode }}
  */
-export function buildTreeData(comparisonRows, threshold = 70, useLlmBased = false) {
+export function buildTreeData(comparisonRows, threshold = 70, useLlmBased = false, includeHallucination = true) {
   const consistencyMap = calculateIndicatorConsistency(comparisonRows, threshold);
 
   // ── 跨报告视角 ──────────────────────────────────────────────────────────────
@@ -265,27 +302,27 @@ export function buildTreeData(comparisonRows, threshold = 70, useLlmBased = fals
     // 按 indicator_code 分组
     const codeMap = new Map();
     for (const row of vtRows) {
-      const code = String(row.indicator_code || '').trim();
+      const code = getIndicatorCode(row);
       if (!codeMap.has(code)) codeMap.set(code, { rows: [], name: '' });
       const entry = codeMap.get(code);
       entry.rows.push(row);
-      if (!entry.name) entry.name = String(row.indicator_name || '').trim();
+      if (!entry.name) entry.name = getIndicatorName(row);
     }
 
     const indicatorNodes = [];
     for (const [code, { rows: indRows, name }] of codeMap) {
       const label = name ? `${code} ${name}` : code;
       indicatorNodes.push(
-        makeNode(`ind_${code}`, 'cross-report', 'indicator', label, indRows, [], threshold, consistencyMap.get(code) ?? null, useLlmBased)
+        makeNode(`ind_${code}`, 'cross-report', 'indicator', label, indRows, [], threshold, consistencyMap.get(code) ?? null, useLlmBased, includeHallucination)
       );
     }
 
     valueTypeNodes.push(
-      makeNode(`vt_${vt}`, 'cross-report', 'valueType', vt, vtRows, indicatorNodes, threshold, null, useLlmBased)
+      makeNode(`vt_${vt}`, 'cross-report', 'valueType', vt, vtRows, indicatorNodes, threshold, null, useLlmBased, includeHallucination)
     );
   }
 
-  const crossReportRoot = makeNode('all', 'cross-report', 'root', '全部报告', comparisonRows, valueTypeNodes, threshold, null, useLlmBased);
+  const crossReportRoot = makeNode('all', 'cross-report', 'root', '全部报告', comparisonRows, valueTypeNodes, threshold, null, useLlmBased, includeHallucination);
 
   // ── 按报告视角 ──────────────────────────────────────────────────────────────
 
@@ -314,11 +351,11 @@ export function buildTreeData(comparisonRows, threshold = 70, useLlmBased = fals
       // 按 indicator_code 分组
       const rIndMap = new Map();
       for (const row of vtRows) {
-        const code = String(row.indicator_code || '').trim();
+        const code = getIndicatorCode(row);
         if (!rIndMap.has(code)) rIndMap.set(code, { rows: [], name: '' });
         const entry = rIndMap.get(code);
         entry.rows.push(row);
-        if (!entry.name) entry.name = String(row.indicator_name || '').trim();
+        if (!entry.name) entry.name = getIndicatorName(row);
       }
 
       const reportIndicatorNodes = [];
@@ -327,7 +364,7 @@ export function buildTreeData(comparisonRows, threshold = 70, useLlmBased = fals
         reportIndicatorNodes.push(
           makeNode(
             `rpt_${rpt}_vt_${vt}_ind_${code}`,
-            'per-report', 'reportIndicator', label, riRows, [], threshold, null, useLlmBased
+            'per-report', 'reportIndicator', label, riRows, [], threshold, null, useLlmBased, includeHallucination
           )
         );
       }
@@ -335,13 +372,13 @@ export function buildTreeData(comparisonRows, threshold = 70, useLlmBased = fals
       reportTypeNodes.push(
         makeNode(
           `rpt_${rpt}_vt_${vt}`,
-          'per-report', 'reportType', vt, vtRows, reportIndicatorNodes, threshold, null, useLlmBased
+          'per-report', 'reportType', vt, vtRows, reportIndicatorNodes, threshold, null, useLlmBased, includeHallucination
         )
       );
     }
 
     perReportNodes.push(
-      makeNode(`rpt_${rpt}`, 'per-report', 'report', rpt, rptRows, reportTypeNodes, threshold, null, useLlmBased)
+      makeNode(`rpt_${rpt}`, 'per-report', 'report', rpt, rptRows, reportTypeNodes, threshold, null, useLlmBased, includeHallucination)
     );
   }
 
@@ -349,13 +386,78 @@ export function buildTreeData(comparisonRows, threshold = 70, useLlmBased = fals
     'all_reports',
     'per-report',
     'perReportRoot',
-    '全部报告',
+    '全部指标',
     comparisonRows,
     perReportNodes,
     threshold,
     null,
-    useLlmBased
+    useLlmBased,
+    includeHallucination
   );
 
-  return { crossReportRoot, perReportRoot };
+  // ── 按指标类型视角 ──────────────────────────────────────────────────────────
+
+  const perTypeNodes = [];
+  for (const vt of VT_ORDER) {
+    const vtRows = comparisonRows.filter(row => getValueTypeZh(row) === vt);
+    if (vtRows.length === 0) continue;
+
+    // 按报告分组
+    const rptMap = new Map();
+    for (const row of vtRows) {
+      const rpt = String(row.report_name || '').trim();
+      if (!rptMap.has(rpt)) rptMap.set(rpt, []);
+      rptMap.get(rpt).push(row);
+    }
+
+    const typeReportNodes = [];
+    for (const [rpt, rptRows] of rptMap) {
+      // 按指标分组
+      const codeMap = new Map();
+      for (const row of rptRows) {
+        const code = getIndicatorCode(row);
+        if (!codeMap.has(code)) codeMap.set(code, { rows: [], name: '' });
+        const entry = codeMap.get(code);
+        entry.rows.push(row);
+        if (!entry.name) entry.name = getIndicatorName(row);
+      }
+
+      const indicatorNodes = [];
+      for (const [code, { rows: indRows, name }] of codeMap) {
+        const label = name ? `${code} ${name}` : code;
+        indicatorNodes.push(
+          makeNode(
+            `type_${vt}_rpt_${rpt}_ind_${code}`,
+            'per-type', 'typeIndicator', label, indRows, [], threshold, null, useLlmBased, includeHallucination
+          )
+        );
+      }
+
+      typeReportNodes.push(
+        makeNode(
+          `type_${vt}_rpt_${rpt}`,
+          'per-type', 'typeReport', rpt, rptRows, indicatorNodes, threshold, null, useLlmBased, includeHallucination
+        )
+      );
+    }
+
+    perTypeNodes.push(
+      makeNode(`type_${vt}`, 'per-type', 'type', vt, vtRows, typeReportNodes, threshold, null, useLlmBased, includeHallucination)
+    );
+  }
+
+  const perTypeRoot = makeNode(
+    'all_types',
+    'per-type',
+    'perTypeRoot',
+    '全部指标',
+    comparisonRows,
+    perTypeNodes,
+    threshold,
+    null,
+    useLlmBased,
+    includeHallucination
+  );
+
+  return { crossReportRoot, perReportRoot, perTypeRoot };
 }

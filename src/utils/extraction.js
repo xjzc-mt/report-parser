@@ -7,14 +7,28 @@ export function isValidValue(value) {
 }
 
 export function normalizeValueType(type) {
-  const valueType = String(type || '').trim();
-  if (valueType === '文本型' || valueType === '文字型' || valueType === '') {
+  const vt = String(type || '').trim().toUpperCase();
+  
+  // 英文及变体转换
+  if (vt === 'TEXT' || vt === 'STRING' || vt === '文字型' || vt === '文本型' || vt === '') {
     return '文字型';
   }
-  if (PROCESSABLE_VALUE_TYPES.includes(valueType)) {
-    return valueType;
+  if (vt === 'NUMERIC' || vt === 'NUMBER' || vt === '数值型') {
+    return '数值型';
   }
-  return valueType || '文字型';
+  if (vt === 'CURRENCY' || vt === 'MONEY' || vt === '货币型') {
+    return '货币型';
+  }
+  if (vt === 'INTENSITY' || vt === 'RATIO' || vt === '强度型') {
+    return '强度型';
+  }
+
+  // 检查是否已经是标准中文
+  if (PROCESSABLE_VALUE_TYPES.includes(vt)) {
+    return vt;
+  }
+  
+  return '文字型';
 }
 
 export function getRequirementValueType(requirement) {

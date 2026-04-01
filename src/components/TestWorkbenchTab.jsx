@@ -161,8 +161,9 @@ function ResultsAnalytics({ rows, similarityThreshold = 70 }) {
   const accuracy = total > 0 ? (TP + TN) / total : null;
   // 精确率 = TP / LLM总输出（分母是LLM总输出，不只是有效输出）
   const precision = totalLlmOutput > 0 ? TP / totalLlmOutput : null;
-  // 召回率 = LLM成功关联的条数 / 总样本（不用阈值，只要关联成功就算）
-  const recall = total > 0 ? totalLlmOutput / total : null;
+  // 召回率 = LLM匹配上的数量 / 测试集数量（分母是有标准答案的总数，不受阈值影响）
+  const testSetCount = rows.filter((r) => hasGroundTruth(r)).length;
+  const recall = testSetCount > 0 ? totalLlmOutput / testSetCount : null;
   // 过摘录率 = FP / LLM总输出
   const overExtractionRate = totalLlmOutput > 0 ? FP / totalLlmOutput : null;
   const f1 = (precision !== null && recall !== null && (precision + recall) > 0)
@@ -885,8 +886,8 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
           icon={<IconTableImport size={26} stroke={1.8} />}
           tag="EXCEL"
           title="测试集文件"
-          hint="含标准答案的测试集 Excel"
-          acceptHint="需含 report_name、indicator_code、pdf_numbers、text_value 列；若未上传定义文件，需额外包含 prompt 列"
+          hint="包含标准答案的测试集 Excel"
+          acceptHint="必传列：report_name, indicator_code, pdf_numbers, text_value, prompt (若未传定义文件)"
           buttonLabel="选择测试集"
           accept=".xlsx,.xls,.csv"
           file={testSetFile}
@@ -902,8 +903,8 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
           icon={<IconBook size={22} stroke={1.8} />}
           tag="EXCEL（可选）"
           title="指标摘录定义文件"
-          hint="含每个指标的官方定义、摘录规则和标准 Prompt"
-          acceptHint="需含 indicator_code、definition、guidance、prompt 列；上传后测试集 prompt 列将被替代"
+          hint="核心包含每个指标的特定提取 Prompt（支持仅有 indicator_code 和 prompt 列）"
+          acceptHint="必传列：indicator_code, prompt。若无 prompt 则组合使用 definition, guidance 列"
           buttonLabel="选择定义文件"
           accept=".xlsx,.xls,.csv"
           file={definitionFile}
