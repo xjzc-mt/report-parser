@@ -9,15 +9,29 @@ import { Tooltip } from '@mantine/core';
  *   height     条形高度（默认 20px）
  */
 
-const SEGMENTS = [
-  { key: 'perfect',      label: '完全匹配', color: '#16a34a', textColor: '#fff' },
-  { key: 'pass',         label: '达标匹配', color: '#86efac', textColor: '#14532d' },
-  { key: 'partial',      label: '部分匹配', color: '#fbbf24', textColor: '#78350f' },
-  { key: 'miss',         label: '漏提取',   color: '#f87171', textColor: '#fff' },
-  { key: 'hallucination',label: '过摘录',   color: '#c084fc', textColor: '#fff' },
+const LEGACY_SEGMENTS = [
+  { key: 'perfect', label: '完全匹配', color: '#16a34a', textColor: '#fff' },
+  { key: 'pass', label: '达标匹配', color: '#86efac', textColor: '#14532d' },
+  { key: 'partial', label: '部分匹配', color: '#fbbf24', textColor: '#78350f' },
+  { key: 'miss', label: '漏提取', color: '#f87171', textColor: '#fff' },
+  { key: 'hallucination', label: '过摘录', color: '#c084fc', textColor: '#fff' },
+];
+
+const MERGED_SEGMENTS = [
+  { key: 'perfect_match', label: '完美匹配', color: '#16a34a', textColor: '#fff' },
+  { key: 'pass_match', label: '达标匹配', color: '#86efac', textColor: '#14532d' },
+  { key: 'duplicate_with_pass', label: '重复摘录-含达标', color: '#60a5fa', textColor: '#1e3a8a' },
+  { key: 'duplicate_without_pass', label: '重复摘录-无达标', color: '#fca5a5', textColor: '#7f1d1d' },
+  { key: 'single_fail', label: '单条错误', color: '#fbbf24', textColor: '#78350f' },
+  { key: 'miss', label: '漏摘录', color: '#f87171', textColor: '#fff' },
+  { key: 'hallucination', label: '幻觉', color: '#c084fc', textColor: '#fff' },
 ];
 
 export function ErrorTypeBar({ breakdown = {}, total, height = 20 }) {
+  const useMerged = Object.prototype.hasOwnProperty.call(breakdown, 'perfect_match') ||
+    Object.prototype.hasOwnProperty.call(breakdown, 'pass_match') ||
+    Object.prototype.hasOwnProperty.call(breakdown, 'single_fail');
+  const SEGMENTS = useMerged ? MERGED_SEGMENTS : LEGACY_SEGMENTS;
   const denom = total || Object.values(breakdown).reduce((a, b) => a + (b ?? 0), 0) || 1;
 
   const segments = SEGMENTS.map((s) => {
@@ -60,7 +74,7 @@ export function ErrorTypeBar({ breakdown = {}, total, height = 20 }) {
         {segments.map((s) => (
           <Tooltip
             key={s.key}
-            label={`${s.label}：${s.count} 条（${s.pct.toFixed(1)}%）`}
+            label={`${s.label}：${s.count} 项（${s.pct.toFixed(1)}%）`}
             withArrow
           >
             <div
@@ -70,16 +84,17 @@ export function ErrorTypeBar({ breakdown = {}, total, height = 20 }) {
                 display: 'flex',
                 alignItems: 'center',
                 justifyContent: 'center',
-                fontSize: 10,
+                fontSize: 9,
                 fontWeight: 700,
                 color: s.textColor,
                 overflow: 'hidden',
                 whiteSpace: 'nowrap',
                 cursor: 'default',
-                flexShrink: 0
+                flexShrink: 0,
+                padding: '0 2px'
               }}
             >
-              {s.pct >= 8 ? `${Math.round(s.pct)}%` : ''}
+              {`${Math.round(s.pct)}%`}
             </div>
           </Tooltip>
         ))}
@@ -95,7 +110,7 @@ export function ErrorTypeBar({ breakdown = {}, total, height = 20 }) {
               style={{ display: 'flex', alignItems: 'center', gap: 4, fontSize: 10, color: '#475569' }}
             >
               <div
-                style={{
+              style={{
                   width: 8,
                   height: 8,
                   borderRadius: 2,
@@ -103,7 +118,7 @@ export function ErrorTypeBar({ breakdown = {}, total, height = 20 }) {
                   flexShrink: 0
                 }}
               />
-              {s.label} {count} 条
+              {s.label} {count} 项
             </div>
           );
         })}

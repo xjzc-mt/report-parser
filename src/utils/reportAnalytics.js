@@ -66,42 +66,6 @@ export function calculateOverallMetrics(comparisonRows, similarityThreshold = 70
   return calculateMetrics(comparisonRows, similarityThreshold, false, includeHallucination);
 }
 
-export function calculateOverallMetricsLlmBased(comparisonRows, similarityThreshold = 70, includeHallucination = true) {
-  return calculateMetrics(comparisonRows, similarityThreshold, true, includeHallucination);
-}
-
-export function groupRowsByYear(rows, similarityThreshold = 70) {
-  const yearMap = new Map();
-  for (const row of rows) {
-    const year = String(row.data_year || '').trim() || '未知年份';
-    if (!yearMap.has(year)) yearMap.set(year, []);
-    yearMap.get(year).push(row);
-  }
-
-  return Array.from(yearMap.entries()).map(([year, yearRows]) => ({
-    year,
-    ...calculateMetrics(yearRows, similarityThreshold, false)
-  }));
-}
-
-export function groupRowsByReport(comparisonRows) {
-  const reportMap = new Map();
-
-  for (const row of comparisonRows) {
-    const reportName = String(row.report_name || '').trim();
-    if (!reportMap.has(reportName)) {
-      reportMap.set(reportName, []);
-    }
-    reportMap.get(reportName).push(row);
-  }
-
-  return Array.from(reportMap.entries()).map(([reportName, rows]) => ({
-    reportName,
-    ...calculateMetrics(rows, 70, false),
-    rows
-  }));
-}
-
 // ── 新增评估指标工具函数 ───────────────────────────────────────────────────────
 
 const NOT_FOUND_2 = '未披露';
@@ -235,19 +199,10 @@ function computeNodeMetrics(rows, threshold, consistencyEntry = null, useLlmBase
   const m = calculateMetrics(rows, threshold, useLlmBased, includeHallucination);
   const metrics = {
     totalCount: m.totalCount,
-    positiveCount: m.positiveCount,
-    negativeCount: m.negativeCount,
-    predictedPositiveCount: m.predictedPositiveCount,
-    TP: m.TP,
-    FP: m.FP,
-    FN: m.FN,
-    TN: m.TN,
     accuracy: m.accuracy,
     recall: m.recall,
     precision: m.precision,
     f1: m.f1,
-    fpr: m.fpr,
-    redundancy: m.redundancy,
     exactMatchRate: calculateExactMatchRate(rows),
     avgSimilarity: m.avgSimilarity,
     avgLlmBasedSimilarity: m.avgLlmBasedSimilarity,
@@ -282,6 +237,11 @@ function makeNode(id, section, level, label, rows, children, threshold, consiste
  * @returns {{ crossReportRoot: TreeNode, perReportRoot: TreeNode, perTypeRoot: TreeNode }}
  */
 export function buildTreeData(comparisonRows, threshold = 70, useLlmBased = false, includeHallucination = true) {
+  // 核心：若不统计幻觉指标，则在构建树之前进行全局预过滤
+  if (!includeHallucination) {
+    comparisonRows = comparisonRows.filter(r => r.match_status !== '幻觉');
+  }
+
   const consistencyMap = calculateIndicatorConsistency(comparisonRows, threshold);
 
   // ── 跨报告视角 ──────────────────────────────────────────────────────────────

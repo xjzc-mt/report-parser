@@ -1,10 +1,16 @@
 import { parseExcel, parsePDF } from './fileParsers.js';
 import { callLLMWithRetry, buildExtractionSystemPrompt } from './llmClient.js';
 import { normalizeValueType, getResultsArray } from '../utils/extraction.js';
+import {
+  buildRowJoinKey,
+  extractFieldOptionsFromRows,
+  resolveValidationFieldMappings,
+  validateValidationFieldMappings
+} from '../utils/validationFieldMappings.js';
 import { PROMPT_OPTIMIZER_SYSTEM_PROMPT, VALUE_TYPE_EN_TO_ZH } from '../constants/testBench.js';
 import { parsePdfNumbers, extractPdfPages, uint8ArrayToBase64 } from './pdfPageExtractor.js';
 import { NOT_FOUND_VALUE } from '../constants/extraction.js';
-import { calculateFieldSimilarity } from './synonymService.js';
+import { areNumericValuesEquivalentWithUnits, calculateFieldSimilarity } from './synonymService.js';
 import {
   appendResults,
   getAllResults,
@@ -58,14 +64,21 @@ export function calculateSimilarity(testValue, llmValue) {
   const testTokens = tokenize(testStr);
   const llmTokens = tokenize(llmStr);
 
+  if (testTokens.size === 0 || llmTokens.size === 0) return 0;
+
   let intersectionCount = 0;
   for (const token of testTokens) {
     if (llmTokens.has(token)) intersectionCount += 1;
   }
 
-  // 分母改为测试集大小（而非并集）
-  if (testTokens.size === 0) return 0;
-  return Math.round((intersectionCount / testTokens.size) * 100);
+  const recall = intersectionCount / testTokens.size;
+  const precision = intersectionCount / llmTokens.size;
+
+  // 使用 F1-Score: 2 * (P * R) / (P + R)
+  if (recall + precision === 0) return 0;
+  const f1 = (2 * precision * recall) / (precision + recall);
+  
+  return Math.round(f1 * 100);
 }
 
 /**
@@ -134,6 +147,75 @@ function avgFieldSims(...sims) {
   const valid = sims.filter((s) => s !== null && s !== undefined);
   if (valid.length === 0) return null;
   return Math.round(valid.reduce((a, b) => a + b, 0) / valid.length);
+}
+
+function buildMatchedComparisonRow(testRow, llmRow, matchCount = 1) {
+  const textSim = fieldSim(testRow.text_value, llmRow.text_value);
+  const pdfSim = calculateFieldSimilarity(testRow.pdf_numbers, llmRow.pdf_numbers, 'exact');
+  const numericEquivalent = isEmptyOrNotFound(testRow.num_value) && isEmptyOrNotFound(llmRow.num_value)
+    ? false
+    : areNumericValuesEquivalentWithUnits(testRow.num_value, llmRow.num_value, testRow.unit, llmRow.unit);
+  const numSim = isEmptyOrNotFound(testRow.num_value) && isEmptyOrNotFound(llmRow.num_value)
+    ? null
+    : calculateFieldSimilarity(
+      testRow.num_value,
+      llmRow.num_value,
+      'numeric',
+      false,
+      null,
+      { leftUnit: testRow.unit, rightUnit: llmRow.unit }
+    );
+  const unitSim = isEmptyOrNotFound(testRow.unit) && isEmptyOrNotFound(llmRow.unit)
+    ? null
+    : (numericEquivalent ? 100 : calculateFieldSimilarity(testRow.unit, llmRow.unit, 'exact'));
+  const currencySim = isEmptyOrNotFound(testRow.currency) && isEmptyOrNotFound(llmRow.currency) ? null : calculateFieldSimilarity(testRow.currency, llmRow.currency, 'exact');
+  const numeratorSim = isEmptyOrNotFound(testRow.numerator_unit) && isEmptyOrNotFound(llmRow.numerator_unit) ? null : calculateFieldSimilarity(testRow.numerator_unit, llmRow.numerator_unit, 'exact');
+  const denominatorSim = isEmptyOrNotFound(testRow.denominator_unit) && isEmptyOrNotFound(llmRow.denominator_unit) ? null : calculateFieldSimilarity(testRow.denominator_unit, llmRow.denominator_unit, 'exact');
+
+  let similarity = 0;
+  const vt = getValueTypeZh(testRow);
+  const hasCurrency = !isEmptyOrNotFound(testRow.currency) || !isEmptyOrNotFound(llmRow.currency);
+
+  if (vt === '文字型') {
+    similarity = Math.round((pdfSim || 0) * 0.05 + (textSim || 0) * 0.95);
+  } else if (vt === '数值型') {
+    if (hasCurrency) {
+      similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.8 + (unitSim || 0) * 0.05 + (currencySim || 0) * 0.1);
+    } else {
+      similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.85 + (unitSim || 0) * 0.1);
+    }
+  } else if (vt === '强度型') {
+    similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.8 + (unitSim || 0) * 0.1 + (numeratorSim || 0) * 0.025 + (denominatorSim || 0) * 0.025);
+  } else if (vt === '货币型') {
+    similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.85 + (unitSim || 0) * 0.1);
+  } else {
+    similarity = avgFieldSims(textSim, numSim, unitSim, currencySim, numeratorSim, denominatorSim) ?? 0;
+  }
+
+  const textLlmSim = isEmptyOrNotFound(testRow.text_value) && isEmptyOrNotFound(llmRow.text_value) ? null : calculateLlmBasedSimilarity(testRow.text_value, llmRow.text_value);
+  const numLlmSim = isEmptyOrNotFound(testRow.num_value) && isEmptyOrNotFound(llmRow.num_value) ? null : calculateLlmBasedSimilarity(String(testRow.num_value ?? ''), String(llmRow.num_value ?? ''));
+  const llm_based_similarity = avgFieldSims(textLlmSim, numLlmSim) ?? 0;
+
+  return {
+    ...testRow,
+    match_status: matchCount > 1 ? '多结果' : '已匹配',
+    similarity,
+    llm_based_similarity,
+    llm_year: llmRow.year || llmRow.llm_year || '',
+    llm_text_value: llmRow.text_value || llmRow.llm_text_value || '',
+    llm_num_value: llmRow.num_value || llmRow.llm_num_value || '',
+    llm_unit: llmRow.unit || llmRow.llm_unit || '',
+    llm_currency: llmRow.currency || llmRow.llm_currency || '',
+    llm_numerator_unit: llmRow.numerator_unit || llmRow.llm_numerator_unit || '',
+    llm_denominator_unit: llmRow.denominator_unit || llmRow.llm_denominator_unit || '',
+    llm_pdf_numbers: llmRow.pdf_numbers || llmRow.llm_pdf_numbers || '',
+    unit_similarity: unitSim,
+    currency_similarity: currencySim,
+    numerator_unit_similarity: numeratorSim,
+    denominator_unit_similarity: denominatorSim,
+    improved_prompt: testRow.improved_prompt || '',
+    improvement_reason: testRow.improvement_reason || ''
+  };
 }
 
 // ── 内部辅助函数 ─────────────────────────────────────────────────────────────
@@ -276,17 +358,19 @@ function remapPageNumbers(relPageStr, pageNumbers) {
  * 右关联：以测试集为基准关联 LLM 1 结果，同时计算关键词相似度
  * 扩展字段：unit、currency、numerator_unit、denominator_unit 各自计算相似度
  */
-function joinTestSetWithLlm1(testSetRows, llm1Results) {
+function joinTestSetWithLlm1(testSetRows, llm1Results, fieldMappings = null) {
+  const effectiveMappings = resolveValidationFieldMappings(fieldMappings);
   const llm1Map = new Map();
   for (const result of llm1Results) {
-    const key = `${result.report_name}|||${String(result.indicator_code || '').trim()}|||${String(result.year || '').trim()}`;
+    const key = buildRowJoinKey(result, effectiveMappings, 'llm');
     if (!llm1Map.has(key)) llm1Map.set(key, []);
     llm1Map.get(key).push(result);
   }
 
   const comparisonRows = [];
+  let matchCount = 0;
   for (const testRow of testSetRows) {
-    const key = `${testRow.report_name}|||${String(testRow.indicator_code || '').trim()}|||${String(testRow.data_year || '').trim()}`;
+    const key = buildRowJoinKey(testRow, effectiveMappings, 'test');
     const matched = llm1Map.get(key) || [];
 
     if (matched.length === 0) {
@@ -312,79 +396,22 @@ function joinTestSetWithLlm1(testSetRows, llm1Results) {
         improvement_reason: ''
       });
     } else {
+      matchCount += matched.length;
       for (const llmRow of matched) {
-        const textSim = fieldSim(testRow.text_value, llmRow.text_value);
-        const pdfSim = calculateFieldSimilarity(testRow.pdf_numbers, llmRow.pdf_numbers, 'exact');
-        const numSim = isEmptyOrNotFound(testRow.num_value) && isEmptyOrNotFound(llmRow.num_value) ? null : calculateFieldSimilarity(testRow.num_value, llmRow.num_value, 'numeric');
-        const unitSim = isEmptyOrNotFound(testRow.unit) && isEmptyOrNotFound(llmRow.unit) ? null : calculateFieldSimilarity(testRow.unit, llmRow.unit, 'exact');
-        const currencySim = isEmptyOrNotFound(testRow.currency) && isEmptyOrNotFound(llmRow.currency) ? null : calculateFieldSimilarity(testRow.currency, llmRow.currency, 'exact');
-        const numeratorSim = isEmptyOrNotFound(testRow.numerator_unit) && isEmptyOrNotFound(llmRow.numerator_unit) ? null : calculateFieldSimilarity(testRow.numerator_unit, llmRow.numerator_unit, 'exact');
-        const denominatorSim = isEmptyOrNotFound(testRow.denominator_unit) && isEmptyOrNotFound(llmRow.denominator_unit) ? null : calculateFieldSimilarity(testRow.denominator_unit, llmRow.denominator_unit, 'exact');
-
-        // 使用加权平均计算相似度（与页面显示逻辑一致）
-        let similarity = 0;
-        const vt = getValueTypeZh(testRow);
-        const hasCurrency = !isEmptyOrNotFound(testRow.currency) || !isEmptyOrNotFound(llmRow.currency);
-
-        if (vt === '文字型') {
-          similarity = Math.round((pdfSim || 0) * 0.05 + (textSim || 0) * 0.95);
-        } else if (vt === '数值型') {
-          if (hasCurrency) {
-            // 数值 80%, 货币 10%, 单位 5%, 页码 5%
-            similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.8 + (unitSim || 0) * 0.05 + (currencySim || 0) * 0.1);
-          } else {
-            // 数值 85%, 单位 10%, 页码 5%
-            similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.85 + (unitSim || 0) * 0.1);
-          }
-        } else if (vt === '强度型') {
-          // 数值 80%, 单位 10%, 分子/分母各 2.5%, 页码 5%
-          similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.8 + (unitSim || 0) * 0.1 + (numeratorSim || 0) * 0.025 + (denominatorSim || 0) * 0.025);
-        } else if (vt === '货币型') {
-          // 数值 85%, 单位 10%, 页码 5%
-          similarity = Math.round((pdfSim || 0) * 0.05 + (numSim || 0) * 0.85 + (unitSim || 0) * 0.1);
-        } else {
-          // 默认：简单平均
-          similarity = avgFieldSims(textSim, numSim, unitSim, currencySim, numeratorSim, denominatorSim) ?? 0;
-        }
-
-        // 基于 LLM 的相似度（反向计算）
-        const textLlmSim = isEmptyOrNotFound(testRow.text_value) && isEmptyOrNotFound(llmRow.text_value) ? null : calculateLlmBasedSimilarity(testRow.text_value, llmRow.text_value);
-        const numLlmSim = isEmptyOrNotFound(testRow.num_value) && isEmptyOrNotFound(llmRow.num_value) ? null : calculateLlmBasedSimilarity(String(testRow.num_value ?? ''), String(llmRow.num_value ?? ''));
-        const llm_based_similarity = avgFieldSims(textLlmSim, numLlmSim) ?? 0;
-
-        comparisonRows.push({
-          ...testRow,
-          match_status: matched.length > 1 ? '多结果' : '已匹配',
-          similarity,
-          llm_based_similarity,
-          llm_year: llmRow.year || '',
-          llm_text_value: llmRow.text_value || '',
-          llm_num_value: llmRow.num_value || '',
-          llm_unit: llmRow.unit || '',
-          llm_currency: llmRow.currency || '',
-          llm_numerator_unit: llmRow.numerator_unit || '',
-          llm_denominator_unit: llmRow.denominator_unit || '',
-          llm_pdf_numbers: llmRow.pdf_numbers || '',
-          unit_similarity: unitSim,
-          currency_similarity: currencySim,
-          numerator_unit_similarity: numeratorSim,
-          denominator_unit_similarity: denominatorSim,
-          improved_prompt: '',
-          improvement_reason: ''
-        });
+        comparisonRows.push(buildMatchedComparisonRow(testRow, llmRow, matched.length));
       }
     }
   }
 
   // ── 追加幻觉行：LLM 输出了但测试集里没有对应 key 的结果 ──────────────────
-  // 构建测试集 key 集合（report_name + indicator_code + data_year）
+  // 构建测试集 key 集合（由有效映射决定）
   const testKeySet = new Set(
-    testSetRows.map((r) => `${r.report_name}|||${String(r.indicator_code || '').trim()}|||${String(r.data_year || '').trim()}`)
+    testSetRows.map((row) => buildRowJoinKey(row, effectiveMappings, 'test'))
   );
 
   let hallucinationCount = 0;
   for (const llmRow of llm1Results) {
-    const key = `${llmRow.report_name}|||${String(llmRow.indicator_code || '').trim()}|||${String(llmRow.year || '').trim()}`;
+    const key = buildRowJoinKey(llmRow, effectiveMappings, 'llm');
     if (testKeySet.has(key)) continue; // 测试集有对应行，已经在上面 join 过了
     // 忽略空输出
     const hasVal = !isEmptyOrNotFound(llmRow.text_value) || !isEmptyOrNotFound(llmRow.num_value);
@@ -478,7 +505,7 @@ function joinTestSetWithLlm1(testSetRows, llm1Results) {
   }
 
   console.log(`[数据清洗] 有效: ${validRows.length}, 无效: ${invalidRows.length}`);
-  return { validRows, invalidRows };
+  return { validRows, invalidRows, matchCount, effectiveMappings };
 }
 
 // ── 阶段一：LLM 1 提取 ───────────────────────────────────────────────────────
@@ -809,7 +836,6 @@ export async function runOptimizationPhase({
     onOptLog?.({ message, timestamp: new Date().toLocaleTimeString() });
   };
 
-  // 恢复已完成的指标
   const existingState = runId ? await getRunState() : null;
   const completedOptimizations = new Set(existingState?.completedOptimizations || []);
 
@@ -824,11 +850,9 @@ export async function runOptimizationPhase({
   const similarityThreshold = llm2Settings.similarityThreshold ?? 70;
   const parallelCount = llm2Settings.parallelCount || 1;
 
-  // 收集每轮验证结果（用于导出「优化轮次」sheet）
-  // 格式：{ indicator_code, indicator_name, iter(0=原始), prompt, verify_report, verify_sim, llm_text, llm_num }
+  // 关键：详细记录每一轮的优化轨迹
   const iterationDetails = [];
 
-  // 按 parallelCount 分批并行处理
   for (let batchStart = 0; batchStart < indicatorGroups.length; batchStart += parallelCount) {
     if (interruptSignal?.interrupted) {
       log('⚠️ 已中断，停止优化后续指标');
@@ -837,302 +861,192 @@ export async function runOptimizationPhase({
     const batch = indicatorGroups.slice(batchStart, batchStart + parallelCount);
 
     await Promise.all(batch.map(async (group) => {
-      const reportCount = new Set(group.rows.map((r) => r.report_name)).size;
-
       if (completedOptimizations.has(group.indicator_code)) {
-        const done = completedOptimizations.size;
-        log(`[${done}/${totalGroups}] 跳过（已完成）：${group.indicator_code}`);
         return;
       }
 
-      // 跳过全组已达阈值的指标
-      const allAboveThreshold = group.rows.every((r) => (r.similarity ?? 0) >= similarityThreshold);
-      if (allAboveThreshold) {
-        optLog(`[${group.indicator_code}] 全 ${group.rows.length} 条相似度均已≥${similarityThreshold}%，无需优化，跳过`);
-        completedOptimizations.add(group.indicator_code);
-        const optCompletedCount = completedOptimizations.size;
-        onProgress?.({
-          message: `[${optCompletedCount}/${totalGroups}] 已跳过（已达阈值）：${group.indicator_code}`,
-          percentage: Math.round((optCompletedCount / totalGroups) * 100),
-          timestamp: new Date().toLocaleTimeString(),
-          completed: optCompletedCount,
-          total: totalGroups,
-          phase: 'optimization'
-        });
-        onPartialResults?.(resultRows.slice());
-        return;
-      }
+      // 计算初始表现
+      let currentBestPrompt = group.rows.find((r) => r.prompt)?.prompt || '';
+      let currentBestSim = group.rows.reduce((s, r) => s + (r.similarity || 0), 0) / (group.rows.length || 1);
+      let lastPrompt = currentBestPrompt;
 
-      const pct = Math.round((completedOptimizations.size / totalGroups) * 98);
-      log(
-        `[${completedOptimizations.size + 1}/${totalGroups}] 优化指标：${group.indicator_code}（${group.rows.length} 条 · ${reportCount} 份报告）`,
-        pct
-      );
-
-    let currentPrompt = group.rows.find((r) => r.prompt)?.prompt || '';
-    let prevBestSim = group.rows.reduce((s, r) => s + (r.similarity || 0), 0) / (group.rows.length || 1);
-    let noImproveCount = 0;
-    let bestPrompt = currentPrompt;
-
-    // 记录 iter=0 原始LLM结果（每行一条）
-    for (const row of group.rows) {
-      iterationDetails.push({
-        indicator_code: group.indicator_code,
-        indicator_name: group.indicator_name,
-        iter: 0,
-        prompt: currentPrompt,
-        verify_report: row.report_name || '',
-        verify_sim: row.similarity ?? '',
-        llm_text: row.llm_text_value || '',
-        llm_num: row.llm_num_value || ''
-      });
-    }
-
-    for (let iter = 0; iter < maxOptIterations; iter += 1) {
-      optLog(`[${group.indicator_code}] 第 ${iter + 1}/${maxOptIterations} 轮优化开始`);
-
-      // 为每份报告提取文本上下文（复用缓存）
-      const reportExamples = [];
-      const seenKey = new Set();
+      // 记录 Iteration 0 (原始状态)
       for (const row of group.rows) {
-        const rpKey = `${row.report_name}|||${row.pdf_numbers}`;
-        if (seenKey.has(rpKey)) continue;
-        seenKey.add(rpKey);
+        iterationDetails.push({
+          indicator_code: group.indicator_code,
+          indicator_name: group.indicator_name,
+          iter: 0,
+          prompt: currentBestPrompt,
+          avg_similarity: currentBestSim.toFixed(1),
+          report_name: row.report_name,
+          similarity: row.similarity,
+          llm_text: row.llm_text_value || '',
+          is_accepted: 'ORIGINAL'
+        });
+      }
 
-        let contextText = '';
-        const pdfFile = findPdfFile(pdfFiles, row.report_name);
-        if (pdfFile) {
-          const pageNumbers = parsePdfNumbers(String(row.pdf_numbers || ''));
-          if (pageNumbers.length > 0) {
-            try {
-              const { pdfData } = await extractPdfPages(pdfFile, pageNumbers, row.report_name);
-              const blob = new Blob([pdfData], { type: 'application/pdf' });
-              const tempFile = new File([blob], 'ctx.pdf', { type: 'application/pdf' });
-              const pages = await parsePDF(tempFile);
-              contextText = pages.map((p) => `[Page ${p.pageNumber}]\n${p.text}`).join('\n\n');
-            } catch (_) { /* 上下文提取失败不影响主流程 */ }
-          }
+      for (let iter = 1; iter <= maxOptIterations; iter++) {
+        if (currentBestSim >= similarityThreshold) {
+          optLog(`[${group.indicator_code}] 已达标 (${currentBestSim.toFixed(1)}%)，停止优化`);
+          break;
         }
 
-        const testValue = String(row.text_value || row.num_value || '').trim();
-        const llmValue = String(row.llm_text_value || row.llm_num_value || '').trim();
-        reportExamples.push({
-          report_name: row.report_name,
-          pdf_numbers: row.pdf_numbers || '',
-          test_answer: testValue,
-          llm_result: llmValue || '未提取',
-          similarity: row.similarity,
-          contextText
-        });
-      }
+        optLog(`[${group.indicator_code}] 第 ${iter}/${maxOptIterations} 轮优化开始...`);
 
-      const indicatorDef = definitionMap?.get(group.indicator_code) || null;
-      const userPrompt = buildCrossReportOptimizationPrompt(
-        group.indicator_code,
-        group.indicator_name,
-        currentPrompt,
-        reportExamples,
-        indicatorDef
-      );
+        // 1. 准备上下文（基于表现最差的 5 个案例）
+        const worstCases = [...group.rows]
+          .sort((a, b) => (a.similarity ?? 0) - (b.similarity ?? 0))
+          .slice(0, 5);
+        
+        const reportExamples = [];
+        for (const row of worstCases) {
+          let contextText = '';
+          const pdfFile = findPdfFile(pdfFiles, row.report_name);
+          if (pdfFile) {
+            const pageNumbers = parsePdfNumbers(String(row.pdf_numbers || ''));
+            try {
+              const { pdfData } = await extractPdfPages(pdfFile, pageNumbers, row.report_name);
+              const { pdfText } = await getPdfInputForLlm(pdfData, false);
+              contextText = pdfText;
+            } catch (_) {}
+          }
+          reportExamples.push({
+            report_name: row.report_name,
+            pdf_numbers: row.pdf_numbers,
+            test_answer: String(row.text_value || row.num_value || '').trim(),
+            llm_result: String(row.llm_text_value || row.llm_num_value || '').trim() || '未提取',
+            similarity: row.similarity,
+            contextText
+          });
+        }
 
-      let optimizedPrompt = currentPrompt;
-      try {
-        const { text, usage } = await callLLMWithRetry(
-          {
+        // 2. 生成新 Prompt
+        const indicatorDef = definitionMap?.get(group.indicator_code) || null;
+        const userPrompt = buildCrossReportOptimizationPrompt(
+          group.indicator_code,
+          group.indicator_name,
+          currentBestPrompt,
+          reportExamples,
+          indicatorDef
+        );
+
+        let newPrompt = '';
+        try {
+          const { text, usage } = await callLLMWithRetry({
             sysPrompt: PROMPT_OPTIMIZER_SYSTEM_PROMPT,
             userPrompt,
             apiUrl: llm2Settings.apiUrl,
             apiKey: resolveApiKey(llm2Settings),
             modelName: llm2Settings.modelName,
             providerType: llm2Settings.providerType
-          },
-          (msg) => log(msg),
-          maxRetries
-        );
+          }, null, maxRetries);
 
-        if (tokenStats) {
-          tokenStats.optInput += (usage?.input_tokens || 0);
-          tokenStats.optOutput += (usage?.output_tokens || 0);
-        }
-
-        const optResults = getResultsArray(JSON.parse(text));
-        const opt =
-          optResults.find((r) => String(r.indicator_code || '').trim() === group.indicator_code) ||
-          optResults[0];
-
-        if (opt?.improved_prompt) {
-          optimizedPrompt = opt.improved_prompt;
-          // 写入 resultRows（每轮都更新，确保最新 prompt 和分析结果）
-          for (const row of resultRows) {
-            if (String(row.indicator_code || '').trim() === group.indicator_code) {
-              row.improved_prompt = opt.improved_prompt;
-              row.improvement_reason = opt.improvement_reason || '';
-              row.error_types = Array.isArray(opt.error_types) ? opt.error_types.join(',') : (opt.error_types || '');
-              row.pattern_analysis = opt.pattern_analysis || '';
-            }
+          if (tokenStats) {
+            tokenStats.optInput += usage.input_tokens;
+            tokenStats.optOutput += usage.output_tokens;
           }
-        }
-      } catch (err) {
-        optLog(`  ❌ 指标 ${group.indicator_code} 第 ${iter + 1} 轮 LLM 2 失败：${err.message}`);
-        break;
-      }
 
-      // 循环验证：取相似度最低的最多3行（优先不同报告）重新提取，计算平均相似度
-      let newAvgSim = prevBestSim;
-      if (maxOptIterations > 1 && optimizedPrompt !== currentPrompt) {
-        // 选取验证行：相似度最低、优先不同报告、最多3行
-        const verifyRows = [];
-        const seenVerifyReports = new Set();
-        const sortedBySimAsc = [...group.rows]
-          .filter((r) => r.pdf_numbers)
-          .sort((a, b) => (a.similarity ?? 0) - (b.similarity ?? 0));
-        for (const r of sortedBySimAsc) {
-          if (!seenVerifyReports.has(r.report_name)) {
-            verifyRows.push(r);
-            seenVerifyReports.add(r.report_name);
-            if (verifyRows.length >= 3) break;
-          }
+          const optData = JSON.parse(text);
+          const optRes = Array.isArray(optData.results) ? optData.results[0] : optData;
+          newPrompt = optRes?.improved_prompt || currentBestPrompt;
+        } catch (err) {
+          optLog(`  ❌ LLM 2 失败: ${err.message}`);
+          continue;
         }
 
-        const verifySims = [];
-        for (const sampleRow of verifyRows) {
-          const pdfFile = findPdfFile(pdfFiles, sampleRow.report_name);
-          const pageNumbers = parsePdfNumbers(String(sampleRow.pdf_numbers || ''));
-          if (!pdfFile || pageNumbers.length === 0) continue;
+        // 3. 验证新 Prompt（随机抽 3 个样本重测）
+        optLog(`  🔍 正在验证新 Prompt 的表现...`);
+        const verifySamples = [...group.rows].sort(() => 0.5 - Math.random()).slice(0, 3);
+        let newTotalSim = 0;
+        let vCount = 0;
+        const roundResults = [];
+
+        for (const sample of verifySamples) {
+          const pdfFile = findPdfFile(pdfFiles, sample.report_name);
+          if (!pdfFile) continue;
+          const pageNumbers = parsePdfNumbers(sample.pdf_numbers);
+          const pdfInput = await getPdfInputForLlm(pdfFile, isGemini2, pageNumbers);
+          const sysPrompt = buildExtractionSystemPrompt({ isGemini: isGemini2, batchType: getValueTypeZh(sample) });
+          const uPrompt = buildTestUserPrompt([{ ...sample, prompt: newPrompt }]);
+          const finalUserPrompt = isGemini2 ? uPrompt : `${uPrompt}\n\n文档内容：\n${pdfInput.pdfText}`;
+
           try {
-            const { pdfData } = await extractPdfPages(pdfFile, pageNumbers, sampleRow.report_name);
-            const { pdfBase64, pdfText } = await getPdfInputForLlm(pdfData, isGemini2);
-            const sysPrompt = buildExtractionSystemPrompt({ isGemini: isGemini2, batchType: getValueTypeZh(sampleRow) });
-            const sampleIndicator = { ...sampleRow, prompt: optimizedPrompt };
-            const uPrompt = buildTestUserPrompt([sampleIndicator]);
-            const verifyPrompt = isGemini2 ? uPrompt : `${uPrompt}\n\n文档内容：\n${pdfText}`;
-
-            const { text: vText, usage: vUsage } = await callLLMWithRetry(
-              {
-                sysPrompt,
-                userPrompt: verifyPrompt,
-                apiUrl: llm2Settings.apiUrl,
-                apiKey: resolveApiKey(llm2Settings),
-                modelName: llm2Settings.modelName,
-                providerType: llm2Settings.providerType,
-                pdfBase64
-              },
-              (msg) => log(msg),
-              maxRetries
-            );
-
+            const { text: vText, usage: vUsage } = await callLLMWithRetry({
+              sysPrompt,
+              userPrompt: finalUserPrompt,
+              apiUrl: llm2Settings.apiUrl,
+              apiKey: resolveApiKey(llm2Settings),
+              modelName: llm2Settings.modelName,
+              providerType: llm2Settings.providerType,
+              pdfBase64: pdfInput.pdfBase64
+            }, null, maxRetries);
+            
             if (tokenStats) {
-              tokenStats.optInput += (vUsage?.input_tokens || 0);
-              tokenStats.optOutput += (vUsage?.output_tokens || 0);
+              tokenStats.optInput += vUsage.input_tokens;
+              tokenStats.optOutput += vUsage.output_tokens;
             }
 
-            const vResults = getResultsArray(JSON.parse(vText));
-            const vResult = vResults.find((r) => String(r.indicator_code || '').trim() === group.indicator_code);
-            if (vResult) {
-              const testValue = String(sampleRow.text_value || sampleRow.num_value || '').trim();
-              const llmValue = String(vResult.text_value || vResult.num_value || '').trim();
-              const sim = calculateSimilarity(testValue, llmValue);
-              verifySims.push(sim);
-              // 写入 post_similarity 字段
-              for (const row of resultRows) {
-                if (
-                  String(row.indicator_code || '').trim() === group.indicator_code &&
-                  row.report_name === sampleRow.report_name
-                ) {
-                  row.post_similarity = sim;
-                }
-              }
-              // 收集本轮验证结果
-              iterationDetails.push({
-                indicator_code: group.indicator_code,
-                indicator_name: group.indicator_name,
-                iter: iter + 1,
-                prompt: optimizedPrompt,
-                verify_report: sampleRow.report_name || '',
-                verify_sim: sim,
-                llm_text: vResult.text_value || '',
-                llm_num: vResult.num_value || ''
-              });
+            const results = getResultsArray(vText);
+            const res = results.find(r => String(r.indicator_code).trim() === group.indicator_code);
+            if (res) {
+              const sim = calculateSimilarity(sample.text_value, res.text_value);
+              newTotalSim += sim;
+              vCount++;
+              roundResults.push({ report_name: sample.report_name, similarity: sim, text: res.text_value });
             }
-          } catch (_) { /* 验证失败不影响主流程 */ }
+          } catch (_) {}
         }
 
-        if (verifySims.length > 0) {
-          newAvgSim = verifySims.reduce((a, b) => a + b, 0) / verifySims.length;
+        const newAvgSim = vCount > 0 ? newTotalSim / vCount : 0;
+        const isImproved = newAvgSim > currentBestSim;
+        optLog(`  📊 验证结果：新平均相似度 ${newAvgSim.toFixed(1)}% (原最佳 ${currentBestSim.toFixed(1)}%)`);
+
+        // 4. 择优录用
+        if (isImproved) {
+          optLog(`  ✅ 接受新 Prompt！性能提升了 ${(newAvgSim - currentBestSim).toFixed(1)}%`);
+          currentBestSim = newAvgSim;
+          currentBestPrompt = newPrompt;
+          
+          // 更新 resultRows
+          for (const row of resultRows) {
+            if (String(row.indicator_code).trim() === group.indicator_code) {
+              row.improved_prompt = newPrompt;
+              row.post_similarity = newAvgSim; // 这里记录的是验证集的平均分
+              row.iteration = iter;
+            }
+          }
+        } else {
+          optLog(`  ⚠️ 性能未提升，保留原 Prompt`);
         }
-      }
 
-      const delta = newAvgSim - prevBestSim;
-      const deltaStr = delta > 0 ? `↑+${Math.round(delta)}%` : delta < 0 ? `↓${Math.round(delta)}%` : '→持平';
-      optLog(`  [${group.indicator_code}] 第${iter + 1}轮：${Math.round(prevBestSim)}% → ${Math.round(newAvgSim)}% ${deltaStr}`);
-
-      // 保存中间状态
-      if (runId) {
-        try {
-          await saveRunState({
-            phase: 'optimization',
-            completedGroups: Array.from(completedOptimizations),
-            completedOptimizations: Array.from(completedOptimizations),
-            sessionId
+        // 记录本轮轨迹
+        for (const vr of roundResults) {
+          iterationDetails.push({
+            indicator_code: group.indicator_code,
+            indicator_name: group.indicator_name,
+            iter,
+            prompt: newPrompt,
+            avg_similarity: newAvgSim.toFixed(1),
+            report_name: vr.report_name,
+            similarity: vr.similarity,
+            llm_text: vr.text,
+            is_accepted: isImproved ? 'YES' : 'NO'
           });
-        } catch (_) { /* 不阻断 */ }
-      }
-
-      if (newAvgSim >= similarityThreshold) {
-        bestPrompt = optimizedPrompt;
-        optLog(`  ✅ 指标 ${group.indicator_code} 达到阈值 ${similarityThreshold}%，停止优化`);
-        break;
-      }
-
-      if (newAvgSim <= prevBestSim) {
-        noImproveCount += 1;
-        if (noImproveCount >= 3) {
-          optLog(`  ⚠️ 指标 ${group.indicator_code} 连续 3 轮无改善，退出`);
-          break;
-        }
-      } else {
-        noImproveCount = 0;
-        prevBestSim = newAvgSim;
-        bestPrompt = optimizedPrompt;
-      }
-
-      currentPrompt = optimizedPrompt;
-    }
-
-    // 确保 bestPrompt 写入 resultRows
-    if (bestPrompt && bestPrompt !== (group.rows.find((r) => r.prompt)?.prompt || '')) {
-      for (const row of resultRows) {
-        if (String(row.indicator_code || '').trim() === group.indicator_code && !row.improved_prompt) {
-          row.improved_prompt = bestPrompt;
         }
       }
-    }
 
-    completedOptimizations.add(group.indicator_code);
-    if (runId) {
-      try {
-        await saveRunState({
-          phase: 'optimization',
-          completedGroups: [],
-          completedOptimizations: Array.from(completedOptimizations),
-          sessionId
-        });
-      } catch (_) { /* 不阻断 */ }
-    }
-    // 每个指标完成后增量保存
-    try { if (runId) await saveFinalRows(runId, resultRows.slice()); } catch (_) { /* 不阻断 */ }
-    onPartialResults?.(resultRows.slice());
-    log(`  ✅ 指标 ${group.indicator_code} 优化完成`);
-    const optCompletedCount = completedOptimizations.size;
-    onProgress?.({
-      message: `[${optCompletedCount}/${totalGroups}] 指标优化完成：${group.indicator_code}`,
-      percentage: Math.round((optCompletedCount / totalGroups) * 100),
-      timestamp: new Date().toLocaleTimeString(),
-      completed: optCompletedCount,
-      total: totalGroups,
-      phase: 'optimization'
-    });
-  }));
+      completedOptimizations.add(group.indicator_code);
+      const done = completedOptimizations.size;
+      onProgress?.({
+        message: `[${done}/${totalGroups}] 优化完成：${group.indicator_code}`,
+        percentage: Math.round((done / totalGroups) * 100),
+        timestamp: new Date().toLocaleTimeString(),
+        completed: done,
+        total: totalGroups,
+        phase: 'optimization'
+      });
+      onPartialResults?.(resultRows.slice());
+    }));
   }
 
   log('Prompt 优化全部完成！', 100);
@@ -1448,36 +1362,83 @@ export async function exportLlm1Results(llm1Rows) {
 /** 解析用户上传的 LLM 结果文件（快速验收模式） */
 export async function parseLlmResultsFile(file) {
   const rows = await parseExcel(file);
-  const requiredFields = ['report_name', 'indicator_code'];
-
-  if (rows.length > 0) {
-    const firstRow = rows[0];
-    const missingFields = requiredFields.filter(f => !(f in firstRow));
-    if (missingFields.length > 0) {
-      throw new Error(`缺少必需字段: ${missingFields.join(', ')}`);
-    }
-  }
 
   return rows.map((r) => ({
-    report_name: String(r.report_name || '').trim(),
-    indicator_code: String(r.indicator_code || '').trim(),
-    indicator_name: String(r.indicator_name || '').trim(),
-    value_type: String(r.value_type || '').trim(),
-    year: String(r.year || r.data_year || '').trim(),
-    text_value: String(r.text_value || '').trim(),
-    num_value: String(r.num_value || '').trim(),
-    unit: String(r.unit || '').trim(),
-    currency: String(r.currency || '').trim(),
-    numerator_unit: String(r.numerator_unit || '').trim(),
-    denominator_unit: String(r.denominator_unit || '').trim(),
-    pdf_numbers: String(r.pdf_numbers || '').trim()
+    ...r,
+    ...('report_name' in r ? { report_name: String(r.report_name || '').trim() } : {}),
+    ...('indicator_code' in r ? { indicator_code: String(r.indicator_code || '').trim() } : {}),
+    ...('indicator_name' in r ? { indicator_name: String(r.indicator_name || '').trim() } : {}),
+    ...('value_type' in r ? { value_type: String(r.value_type || '').trim() } : {}),
+    ...(('year' in r) || ('data_year' in r) ? { year: String(r.year || r.data_year || '').trim() } : {}),
+    ...('text_value' in r ? { text_value: String(r.text_value || '').trim() } : {}),
+    ...('num_value' in r ? { num_value: String(r.num_value || '').trim() } : {}),
+    ...('unit' in r ? { unit: String(r.unit || '').trim() } : {}),
+    ...('currency' in r ? { currency: String(r.currency || '').trim() } : {}),
+    ...('numerator_unit' in r ? { numerator_unit: String(r.numerator_unit || '').trim() } : {}),
+    ...('denominator_unit' in r ? { denominator_unit: String(r.denominator_unit || '').trim() } : {}),
+    ...('pdf_numbers' in r ? { pdf_numbers: String(r.pdf_numbers || '').trim() } : {})
   }));
 }
 
 /** 将上传的 LLM 结果与测试集关联（快速验收模式） */
-export function joinLlmResultsWithTestSet(llmResults, testSetRows) {
-  const { validRows, invalidRows } = joinTestSetWithLlm1(testSetRows, llmResults);
-  return { validRows, invalidRows };
+export function joinLlmResultsWithTestSet(llmResults, testSetRows, options = {}) {
+  const { validRows, invalidRows, matchCount, effectiveMappings } = joinTestSetWithLlm1(
+    testSetRows,
+    llmResults,
+    options.fieldMappings
+  );
+  return { validRows, invalidRows, matchCount, effectiveMappings };
+}
+
+export function validateQuickValidationAnalysisInput({ llmResults, testSetRows, fieldMappings }) {
+  const llmFields = extractFieldOptionsFromRows(llmResults);
+  const testFields = extractFieldOptionsFromRows(testSetRows);
+  return validateValidationFieldMappings({
+    mappings: fieldMappings,
+    llmFields,
+    testFields
+  });
+}
+
+export function refreshComparisonRowsWithCurrentSimilarityRules(rows = []) {
+  return rows.map((row) => {
+    if (!row || row.match_status === '幻觉') return row;
+
+    if (row.match_status === '未匹配') {
+      return {
+        ...row,
+        similarity: 0,
+        llm_based_similarity: 0,
+        unit_similarity: null,
+        currency_similarity: null,
+        numerator_unit_similarity: null,
+        denominator_unit_similarity: null
+      };
+    }
+
+    const testRow = {
+      ...row,
+      pdf_numbers: row.pdf_numbers || '',
+      text_value: row.text_value || '',
+      num_value: row.num_value || '',
+      unit: row.unit || '',
+      currency: row.currency || '',
+      numerator_unit: row.numerator_unit || '',
+      denominator_unit: row.denominator_unit || ''
+    };
+    const llmRow = {
+      year: row.llm_year || '',
+      text_value: row.llm_text_value || '',
+      num_value: row.llm_num_value || '',
+      unit: row.llm_unit || '',
+      currency: row.llm_currency || '',
+      numerator_unit: row.llm_numerator_unit || '',
+      denominator_unit: row.llm_denominator_unit || '',
+      pdf_numbers: row.llm_pdf_numbers || ''
+    };
+
+    return buildMatchedComparisonRow(testRow, llmRow, row.match_status === '多结果' ? 2 : 1);
+  });
 }
 
 /** 检查 PDF 匹配情况（快速优化模式） */

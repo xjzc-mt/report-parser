@@ -1,296 +1,519 @@
-# 设计文档：统一分析视图 & 验收模式增强
+# 统一分析页设计说明（当前实现）
 
-**日期**：2026-03-27
-**状态**：已审批，待实现
-**目标**：通过精确的多维评估指标，支持将 LLM 摘录的准确率和召回率优化至 95% 以上
+**更新时间**：2026-04-13  
+**适用组件**：`UnifiedAnalysisMerged` + `AnalysisDetailsTable`  
+**说明**：本文件不再描述“待实现方案”，而是描述当前统一分析页的真实结构、指标口径与交互规则。
 
----
+## 1. 目标定位
 
-## 背景与问题
+当前统一分析页承担 3 件事：
 
-当前「快速验收模式」（QuickValidationMode）存在三个主要问题：
+1. 用统一的测试项口径汇总 `comparisonRows`。
+2. 让用户按不同视角下钻定位问题。
+3. 在同页查看当前节点的可筛选明细表，并支持导出分析面板数据。
 
-1. **分析维度不足**：只有「整体分析」和「按报告分析」两个平行 Tab，无法按指标类型或具体指标粒度查看，也无法组合维度（如「某类型在某报告某年的表现」）。
-
-2. **数据不持久**：切换到其他工作模式再切回来，上传的文件和分析结果全部丢失，需要重新上传和重新分析。
-
-3. **评估指标不全**：缺少「错误类型分布」「完全匹配率」「跨报告稳定性」这三类对 Prompt 优化决策最关键的指标，导致知道「哪里不好」但不知道「为什么不好」。
+它已经是当前测试集工作台和快速验收模式的主分析入口。
 
 ---
 
-## 整体方案
+## 2. 入口与依赖
 
-### 分析视图：从多 Tab 改为统一下钻树
+主组件位置：[UnifiedAnalysisMerged.jsx](/Users/michael_drj/AiProjects/report-parser/src/components/UnifiedAnalysisMerged.jsx)
 
-废弃原有的「整体分析」「按报告分析」两个 Tab，改为**一个统一分析视图**，左侧是两段式树，右侧是当前节点子项的指标列表，顶部是置顶汇总行。
+底层依赖：
 
-**树结构：**
-
-```
-🌐 跨报告视角（section 1）
-  ▼ 全部报告                     ← 等价于原「整体分析」
-      ▶ 文字型 (180)
-          ENV-001 温室气体总排放量
-          ENV-002 可再生能源比例
-          ⋯
-      ▶ 数值型 (210)
-      ▶ 货币型 (65)
-      ▶ 强度型 (45)
-
-─── 分隔线 ───
-
-📄 按报告视角（section 2）
-  ▶ 公司A 年报 (150)
-      ▶ 2023年 (50)
-          ▶ 文字型 (18)
-              ENV-001
-              ⋯
-          ▶ 数值型 (22)
-          ▶ 货币型 (7)
-          ▶ 强度型 (3)
-      ▶ 2022年 (50)
-      ▶ 2021年 (50)
-  ▶ 公司B 年报 (100)
-  ⋯
-```
-
-**右侧面板规则（始终显示当前节点的「下一层子项」）：**
-
-| 选中节点（跨报告） | 右侧列表行 |
-|---|---|
-| 全部报告 | 4 种指标类型 |
-| 文字型 | 各指标（含跨报告稳定性列） |
-| 具体指标 | 各报告中该指标的表现 |
-
-| 选中节点（按报告） | 右侧列表行 |
-|---|---|
-| 某份报告 | 年份列表 |
-| 某年 | 4 种指标类型 |
-| 某年某类型 | 该类型下的指标列表 |
-| 某指标 | 该指标在这份报告这一年的原始数据行 |
-
-面包屑导航支持跳回任意上级层级。
+- [analysisV2Metrics.js](/Users/michael_drj/AiProjects/report-parser/src/utils/analysisV2Metrics.js)
+- [unifiedAnalysisMergeAdapter.js](/Users/michael_drj/AiProjects/report-parser/src/utils/unifiedAnalysisMergeAdapter.js)
+- [analysisDetailsModel.js](/Users/michael_drj/AiProjects/report-parser/src/utils/analysisDetailsModel.js)
+- [AnalysisDetailsTable.jsx](/Users/michael_drj/AiProjects/report-parser/src/components/AnalysisDetailsTable.jsx)
+- [analysisPanelExportService.js](/Users/michael_drj/AiProjects/report-parser/src/services/analysisPanelExportService.js)
 
 ---
 
-## 新增评估指标
+## 3. 数据输入与输出
 
-### 1. 错误类型分布（Error Type Breakdown）
+## 3.1 输入
 
-将每行数据分为 5 类：
+统一分析页接收：
 
-| 类型 | 定义 | 颜色 | Prompt 修复方向 |
-|------|------|------|----------------|
-| ✅ 完全匹配 | `match_status !== '未匹配'` 且 `similarity === 100` | 深绿 | 无需修复 |
-| 🟢 达标匹配 | 已匹配且 `similarity >= threshold`（但 < 100） | 浅绿 | 微调即可 |
-| 🟡 部分匹配 | 已匹配但 `similarity < threshold` | 黄 | 优化输出格式 |
-| 🔴 漏提取 | 测试集有值，LLM 返回未披露/未匹配 | 红 | 加「若有则必须提取」类指令 |
-| 🟣 过摘录 | 测试集无值，LLM 返回了值 | 紫 | 加「若无明确数据则留空」约束 |
+- `comparisonRows`
+- `threshold`
+- `onThresholdChange`
+- `onJumpToOptimization`（可选）
 
-在置顶汇总行下方显示水平堆叠条形图，各区段宽度按百分比，悬停显示具体条数。
+## 3.2 输出
 
-### 2. 完全匹配率（Exact Match Rate, EMR）
+统一分析页当前提供这些输出能力：
 
-```
-EMR = similarity === 100 的行数 / 有标准答案的总行数
-```
-
-显示在置顶汇总行，与「准确率」并列。准确率是「阈值及格线」，EMR 是「真正满分」，两者结合判断质量上限。
-
-### 3. 跨报告稳定性（Indicator Consistency Score）
-
-仅在「跨报告视角」的指标层列表中显示（按报告视角不需要）：
-
-```
-稳定性 = 该指标在多少份报告中 similarity >= threshold / 该指标出现的总报告数
-```
-
-以小色块序列可视化（每个色块代表一份报告：绿=达标，红=未达标），并显示百分比数字。
-
-**用途**：稳定性 0% → Prompt 根本有问题，优先修；稳定性 50-99% → 部分报告格式差异，具体分析。
+- 当前树节点下的汇总指标展示
+- 当前树节点下的错误类型分布
+- 当前节点子级概览表
+- 当前节点明细表
+- 当前分析面板 Excel 导出
+- 向优化模式传递“不达标指标代码集合”
 
 ---
 
-## 数据持久化
+## 4. 当前分析视角
 
-### 持久化范围
-- 上传的文件（已部分实现，需补全 QuickValidationMode）
-- **分析结果 comparisonRows**（新增）
+统一分析页当前有 3 个一级视角根节点：
 
-### 持久化策略
+1. `跨报告视角`
+2. `按报告视角`
+3. `按类型视角`
 
-利用现有 `phaseResults` IndexedDB store，新增固定 key：
+### 4.1 跨报告视角
 
-```javascript
-// persistenceService.js 新增
-const VALIDATION_KEY = 'validation_comparison';
+结构：
 
-export async function saveValidationResults(rows) { ... }
-export async function getValidationResults() { ... }
-export async function clearValidationResults() { ... }
-```
+`全部报告 → 指标类型 → 指标`
 
-### 交互规则
-- 进入快速验收模式时：自动从 IDB 恢复 comparisonRows，直接渲染分析树（无需重新分析）
-- 点「重新分析」：重跑关联分析，结果覆盖写入 IDB
-- 文件删除后重新上传：自动清除旧的 comparisonRows，提示用户重新分析
+适合回答：
 
----
+- 当前整体哪类指标最差。
+- 某个指标跨报告表现如何。
 
-## 跳转到快速优化
+### 4.2 按报告视角
 
-### 入口
-- 位于验收模式分析区域的操作栏，常驻显示
-- 按钮文案：「跳转到快速优化 →」
+结构：
 
-### 携带数据
-跳转时将当前树中**选中节点所覆盖的 rows** 中 `similarity < threshold` 的指标集合（去重 indicator_code）作为预选优化范围。
+`全部指标 → 报告 → 指标类型 → 指标`
 
-### 优化范围确认面板（OptimizationScopeConfirm）
+适合回答：
 
-跳转后弹出确认面板（覆盖在优化模式入口上方）：
+- 哪份报告拖累整体结果。
+- 某份报告里哪个类型最差。
 
-```
-┌─────────────────────────────────────────────┐
-│ 📋 本次优化范围确认                            │
-│                                              │
-│  来源：强度型（全部报告）                       │
-│  待优化指标：32 条（similarity < 70%）         │
-│  预计 API 调用次数：约 64 次                   │
-│                                              │
-│  [修改范围（展开指标清单）]    [确认，开始优化]   │
-└─────────────────────────────────────────────┘
-```
+### 4.3 按类型视角
 
-「修改范围」展开可多选的指标代码列表，用户可取消勾选不想优化的指标。
+结构：
+
+`全部指标 → 指标类型 → 报告 → 指标`
+
+适合回答：
+
+- 某类指标在不同报告中的分布。
+- 同一类型下哪些报告是异常点。
 
 ---
 
-## 阈值设置
+## 5. 当前树节点模型
 
-- 保留现有的两个阈值输入框（基于测试集 / 基于 LLM）
-- 默认值从 `llm2Settings.similarityThreshold` 读取
-- 阈值变更后，所有指标（准确率、召回率、EMR、错误分布、稳定性）**实时重算**，无需重新关联分析
+树节点由 [unifiedAnalysisMergeAdapter.js](/Users/michael_drj/AiProjects/report-parser/src/utils/unifiedAnalysisMergeAdapter.js) 生成。
 
----
+当前节点结构包含：
 
-## 组件变更清单
+- `id`
+- `section`
+- `level`
+- `label`
+- `items`
+- `hallucinations`
+- `children`
+- `filters`
+- `metrics`
 
-### 新建
-| 文件 | 职责 |
-|------|------|
-| `src/components/UnifiedAnalysisTree.jsx` | 统一分析视图主组件（左树 + 右面板 + 面包屑 + 置顶行） |
-| `src/components/ErrorTypeBar.jsx` | 错误类型堆叠条形图 |
-| `src/components/OptimizationScopeConfirm.jsx` | 跳转优化前的范围确认面板 |
+### 5.1 `items`
 
-### 修改
-| 文件 | 改动 |
-|------|------|
-| `src/utils/reportAnalytics.js` | 新增 `calculateExactMatchRate`、`calculateErrorTypeBreakdown`、`calculateIndicatorConsistency`、`buildTreeData` |
-| `src/services/persistenceService.js` | 新增 `saveValidationResults`、`getValidationResults`、`clearValidationResults` |
-| `src/components/QuickValidationMode.jsx` | 替换 AnalysisView 为 UnifiedAnalysisTree；接入结果持久化；传递选中范围给优化模式 |
-| `src/components/TestWorkbenchTab.jsx` | 接收跳转时的预选指标并传入 QuickOptimizationMode |
+这里不是原始 `comparisonRows`，而是已经聚合到“测试项级”的对象。
 
-### 废弃（可保留文件但不再使用）
-| 文件 | 说明 |
-|------|------|
-| `src/components/AnalysisView.jsx` | 被 UnifiedAnalysisTree 替代 |
-| `src/components/ReportAnalytics.jsx` | 被 UnifiedAnalysisTree 替代 |
+一个测试项由以下组合确定：
 
----
+- `reportName`
+- `indicatorCode`
+- `dataYear`
 
-## 关键数据结构
+### 5.2 `hallucinations`
 
-### 树节点（TreeNode）
-```typescript
-interface TreeNode {
-  id: string;
-  section: 'cross-report' | 'per-report';
-  level: 'root' | 'valueType' | 'indicator' | 'report' | 'year' | 'reportType' | 'reportIndicator';
-  label: string;
-  rows: ComparisonRow[];     // 该节点覆盖的原始数据行
-  children: TreeNode[];
-  // 预计算指标（由 buildTreeData 生成）
-  metrics: NodeMetrics;
-}
+单独存放 `match_status === '幻觉'` 的输出行，用于：
 
-interface NodeMetrics {
-  totalCount: number;
-  matchedCount: number;
-  accuracy: number | null;
-  recall: number | null;
-  precision: number | null;
-  f1: number | null;
-  exactMatchRate: number | null;
-  avgSimilarity: number;
-  avgLlmBasedSimilarity: number;
-  errorBreakdown: {
-    perfect: number; pass: number; partial: number;
-    miss: number; hallucination: number; tn: number;
-  };
-  // 仅 indicator 节点（跨报告视角）有此字段
-  consistencyScore?: number;
-  consistencyDots?: ('pass' | 'fail')[];
-}
-```
+- 幻觉率统计
+- 错误类型分布
+- 明细表展示
+
+### 5.3 `filters`
+
+每个节点带有路径过滤条件，例如：
+
+- `reportNames`
+- `indicators`
+- `valueTypes`
+
+这些过滤条件会沿路径合并，并自动传给底部明细表。
 
 ---
 
-## 新增工具函数签名
+## 6. 当前指标口径
 
-```javascript
-// reportAnalytics.js
+所有汇总指标都基于“测试项级”而不是原始行级。
 
-/** 单行错误类型分类 */
-function classifyRow(row, threshold)
-  // → 'perfect' | 'pass' | 'partial' | 'miss' | 'hallucination' | 'tn'
+## 6.1 测试项级聚合
 
-/** 错误类型分布统计 */
-export function calculateErrorTypeBreakdown(rows, threshold)
-  // → { perfect, pass, partial, miss, hallucination, tn }
+在 [analysisV2Metrics.js](/Users/michael_drj/AiProjects/report-parser/src/utils/analysisV2Metrics.js) 中，多个原始关联行会先聚合为一个测试项：
 
-/** 完全匹配率 */
-export function calculateExactMatchRate(rows)
-  // → number (0-1) | null
+- 测试项下可能有 0 条输出
+- 也可能有 1 条输出
+- 也可能有多条输出
 
-/** 每个指标的跨报告稳定性（仅跨报告视角使用） */
-export function calculateIndicatorConsistency(rows, threshold)
-  // → Map<indicator_code, { score: number, dots: ('pass'|'fail')[] }>
+系统会记录：
 
-/** 构建完整树数据结构 */
-export function buildTreeData(comparisonRows, threshold)
-  // → { crossReportRoot: TreeNode, perReportNodes: TreeNode[] }
-```
+- `outputCount`
+- `bestRow`
+- `bestSimilarity`
+- `hit`
+- `duplicate`
+- `miss`
+
+## 6.2 分类规则
+
+当前分类共有 7 类：
+
+| 分类 key | 展示名 | 含义 |
+| --- | --- | --- |
+| `perfect_match` | 完美匹配 | 单条输出且相似度 100 |
+| `pass_match` | 达标匹配 | 单条输出且相似度达到阈值但未满分 |
+| `single_fail` | 单条错误 | 单条输出但未达到阈值 |
+| `duplicate_with_pass` | 重复摘录-含达标 | 多条输出，至少一条达标 |
+| `duplicate_without_pass` | 重复摘录-无达标 | 多条输出，无一条达标 |
+| `miss` | 漏摘录 | 测试项无输出 |
+| `hallucination` | 幻觉 | 无对应测试项却输出了结果 |
+
+## 6.3 汇总指标
+
+当前节点指标包括：
+
+- `测试项`
+- `输出项`
+- `严格通过率`
+- `宽松通过率`
+- `召回率`
+- `精确率`
+- `重复率`
+- `漏摘率`
+- `平均最佳相似度`
+- `幻觉率`
+
+### 6.4 指标含义
+
+#### 严格通过率
+
+仅统计：
+
+- 单条输出
+- 且达到阈值
+
+#### 宽松通过率
+
+统计：
+
+- 完美匹配
+- 达标匹配
+- 重复摘录但含达标
+
+#### 召回率
+
+有输出的测试项占全部测试项的比例。
+
+#### 精确率
+
+使用 `宽松通过数 / 输出项数` 的口径。
+
+#### 幻觉率
+
+使用 `幻觉数 / 输出项数` 的口径。
 
 ---
 
-## 验证方案
+## 7. 当前年份过滤规则
 
-1. **树导航**
-   - 跨报告视角：全部报告 → 文字型 → ENV-001 → 各报告行，确认面包屑和指标都正确
-   - 按报告视角：某报告 → 某年 → 某类型 → 具体指标行
+年份过滤通过 [analysisV2Metrics.js](/Users/michael_drj/AiProjects/report-parser/src/utils/analysisV2Metrics.js) 中的索引能力实现。
 
-2. **新指标正确性**
-   - 选一个已知数据集手工验算：EMR、错误类型分布、稳定性
-   - 验证阈值改变后所有指标实时更新
+当前规则：
 
-3. **持久化**
-   - 完成关联分析后切换到「完整流程」模式再切回，确认文件和 comparisonRows 均在
-   - 点「重新分析」确认结果被覆盖
+- 未选择年份：使用全量数据。
+- 选择年份：只取所选年份数据。
+- 没有年份的测试项与幻觉项会被保留在结果里，不会因为年份筛选直接消失。
 
-4. **跳转优化**
-   - 在树中选中「强度型（全部报告）」后点跳转
-   - 确认确认面板显示正确的指标数量
-   - 确认「修改范围」可取消勾选个别指标
-   - 确认进入优化模式后只优化选定范围
+这个规则的目的是避免：
 
-5. **简繁体相似度**
-   - 构造「百万」vs「百萬」的测试用例，确认 similarity = 100
+- 用户一筛年份，缺失年份的数据全部被误删。
+- 某些无法识别年份的行不再参与分析。
 
 ---
 
-## 不在本次范围内
+## 8. 当前页面布局
 
-- 相似度分布直方图（EMR 和错误类型分布已能反映分布形状，直方图留后续）
-- 导出包含新指标的 Excel 报告（后续迭代）
-- 快速优化模式本身的 UI 改动（仅接收预选指标，不改优化逻辑）
+统一分析页当前分为 5 个主要区域：
+
+1. 工具栏
+2. 面包屑
+3. 置顶汇总条
+4. 错误类型分布 + 右侧子级概览
+5. 底部明细表
+
+### 8.1 工具栏
+
+当前工具栏支持：
+
+- 年份多选
+- 相似度阈值输入
+- “统计幻觉”开关
+- 导出分析面板数据
+- 跳转优化入口（当父组件提供时）
+
+### 8.2 面包屑
+
+点击任意父级节点后，可通过面包屑回跳上层。
+
+### 8.3 置顶汇总条
+
+当前用于固定展示选中节点的关键摘要：
+
+- 当前标题
+- 输出项数
+- 一组核心指标 badge
+
+### 8.4 错误类型分布
+
+由 [ErrorTypeBar.jsx](/Users/michael_drj/AiProjects/report-parser/src/components/ErrorTypeBar.jsx) 展示。
+
+当前分类颜色与标签与明细表保持一致。
+
+### 8.5 右侧概览面板
+
+根据当前节点层级展示“下一层子项”列表。
+
+例如：
+
+- 选中“全部报告”时，右侧展示类型列表。
+- 选中“某类型”时，右侧展示该类型下的指标列表。
+- 选中“某报告”时，右侧展示该报告下的类型列表。
+
+---
+
+## 9. 当前明细表设计
+
+底部明细表组件为 [AnalysisDetailsTable.jsx](/Users/michael_drj/AiProjects/report-parser/src/components/AnalysisDetailsTable.jsx)。
+
+## 9.1 当前列结构
+
+当前固定列为：
+
+1. 报告
+2. 指标
+3. 类型
+4. 相似度
+5. 分类
+6. 测试集详情
+7. LLM详情
+8. 输出数
+
+## 9.2 当前列宽策略
+
+使用 grid 布局：
+
+- 前 5 列和最后一列固定宽
+- `测试集详情 / LLM详情` 两列使用 `minmax(311px, 1fr)` 弹性布局
+
+这样做的目标是：
+
+- 保持结构稳定
+- 让长详情列在大屏下可适度变宽
+- 但又不至于像更早的宽版实现那样过度拉伸
+
+## 9.3 当前筛选能力
+
+支持对以下列做多选筛选并“应用”：
+
+- 报告
+- 指标
+- 类型
+- 相似度
+- 分类
+- 输出数
+
+当前不支持对“测试集详情 / LLM详情”做列级多选筛选。
+
+## 9.4 当前详情字段规则
+
+### 文字型
+
+字段：
+
+- 页码
+- 值
+
+当前行为：
+
+- 值最多显示 12 行
+- 超出后 hover tooltip 展示全量内容
+- 字符级共享内容高亮仍保留
+
+### 数值型
+
+字段：
+
+- 页码
+- 值
+- 单位
+
+### 货币型
+
+字段：
+
+- 页码
+- 值
+- 单位
+- 货币
+
+### 强度型
+
+字段：
+
+- 页码
+- 值
+- 单位
+- 分子单位
+- 分母单位
+
+### 当前“货币型”判断规则
+
+行高判断已与字段展示保持一致：
+
+- 如果类型本身是 `货币型`，使用货币型高度。
+- 如果类型是 `数值型`，但任一侧存在 `currency` 字段，也按货币型高度处理。
+
+---
+
+## 10. 当前行高与虚拟滚动策略
+
+这是本轮性能优化后的关键实现。
+
+## 10.1 行高策略
+
+当前不是“所有行同高”，而是“按类型固定高度”：
+
+| 类型 | 当前高度 |
+| --- | --- |
+| 文字型 | `252px` |
+| 强度型 | `156px` |
+| 数值型 | `116px` |
+| 货币型 | `132px` |
+
+这样做的原因：
+
+- 文字型内容长度天然不稳定。
+- 其余三类字段结构固定，适合更紧凑的高度。
+- 比“完全动态高度”更稳定，也更适合虚拟滚动。
+
+## 10.2 虚拟滚动
+
+当前明细表不再一次性渲染全部行，而是：
+
+1. 先根据每行类型计算高度。
+2. 生成累计 offset 布局。
+3. 根据 `scrollTop + viewportHeight` 计算虚拟窗口。
+4. 只渲染可见区和少量 overscan 行。
+
+对应实现位于 [analysisDetailsModel.js](/Users/michael_drj/AiProjects/report-parser/src/utils/analysisDetailsModel.js)。
+
+---
+
+## 11. 当前性能策略
+
+统一分析页当前使用了以下性能策略：
+
+## 11.1 索引先行
+
+`comparisonRows` 不再每次交互都全量重扫。
+
+当前流程是：
+
+1. 先构建 `analysis index`
+2. 再从索引里按年份取 subset
+3. 再基于 subset 和阈值生成模型
+
+## 11.2 节点查找使用映射表
+
+树数据生成后会同步生成：
+
+- `nodeMap`
+- `pathMap`
+
+用于：
+
+- O(1) 取当前节点
+- 快速生成面包屑路径
+
+## 11.3 明细表使用轻量行模型
+
+不是把原始行直接塞到表格里，而是先构建：
+
+- 轻量 `detail row model`
+- 列筛选项
+- 虚拟布局信息
+
+## 11.4 列筛选“选择后应用”
+
+多选筛选不是每勾一项就立刻全表刷新，而是：
+
+1. 临时选择
+2. 点击“应用”
+3. 再触发表格结果更新
+
+## 11.5 非关键状态使用 `startTransition`
+
+当前年份切换和幻觉开关等交互已通过 `startTransition` 降低主线程阻塞感。
+
+---
+
+## 12. 当前导出规则
+
+统一分析页当前支持导出“当前分析面板”的概览数据。
+
+导出规则由 [unifiedAnalysisPanel.js](/Users/michael_drj/AiProjects/report-parser/src/utils/unifiedAnalysisPanel.js) 决定：
+
+- 自动推断面板主列标签：
+  - 指标类型 / 指标 / 报告 / 名称
+- 导出当前节点子项
+- 自动附带当前日期构造文件名
+
+导出内容偏“概览表”，不是明细表全量导出。
+
+---
+
+## 13. 当前已知边界
+
+### 13.1 不是所有 UI 状态都持久化
+
+当前不会持久化：
+
+- 树展开状态
+- 当前选中节点
+- 明细筛选条件
+- 明细滚动位置
+
+### 13.2 统一分析页主要面向大结果集定位问题
+
+它现在优先保证：
+
+- 汇总视角切换
+- 节点定位
+- 明细筛选与滚动
+
+不追求“每个按钮点击后 0 延迟无感”，而是追求“大数据量下不再整页卡死”。
+
+### 13.3 面板导出仍偏概览
+
+如果后续需要“当前节点全量明细导出”，需要新增明细导出链路，而不是复用现有面板导出。
+
+---
+
+## 14. 后续升级入口
+
+如果下一版继续升级统一分析页，建议优先看：
+
+1. 更细粒度的局部重算。
+2. 明细导出。
+3. 树节点与优化范围联动可视化。
+4. 进一步拆分 `UnifiedAnalysisMerged.jsx` 的职责。
