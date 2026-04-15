@@ -35,3 +35,9 @@ extraction_results_*.xlsx
 # openspec
 openspec/
 .claude/skills/openspec*
+
+# Superpowers temporary files
+.superpowers/
+
+# Process ID files
+*.pid

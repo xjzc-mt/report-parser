@@ -14,7 +14,7 @@ npm run preview   # 预览生产构建结果
 
 暂无测试或代码检查命令。
 
-环境配置：将 `.env.example` 复制为 `.env`，填入 `VITE_GEMINI_API_KEY`。
+环境配置：将 `.env.example` 复制为 `.env`，填入 `VITE_GEMINI_API_KEY`。修改 `.env` 后需重启 `npm run dev`。
 
 ## 架构概览
 
@@ -79,9 +79,20 @@ PDF 文件列表 + 测试集 Excel（含标准答案和 pdf_numbers 页码）
 
 **独立优化入口**：用户可上传已有的关联对比文件（`parseComparisonFile`），直接跳过阶段一运行 LLM 2 优化。
 
-**测试集 Excel 必须包含列：** `report_name`、`pdf_numbers`、`indicator_code`、`indicator_name`、`data_year`、`text_value`（标准答案）、`value_type_1`（中文指标类型）或 `value_type`（英文）、`prompt`（可选，当前提取指令）。
+**测试集 Excel 必须包含列 (Mandatory Columns)：**
+*   `report_name`: PDF 文件名（不含扩展名），用于定位 PDF。
+*   `pdf_numbers`: 指标所在页码（如 `12` 或 `12,13`），用于截取文本。
+*   `indicator_code`: 指标唯一编码。
+*   `indicator_name`: 指标名称。
+*   `data_year`: 数据年份。
+*   `text_value`: **标准答案**（文字型，用于相似度对比）。
+*   `value_type_1` (或 `value_type`): 指标类型 (文字型/数值型/强度型/货币型)。
+*   `prompt`: **提取提示词** (若上传了定义文件，则定义文件中的 prompt 优先；两者皆无则报错)。
 
-**关联对比文件（阶段一输出）列格式：** `report_name`、`indicator_code`、`pdf_numbers`、`test_text_value`、`match_status`、`similarity`（0-100）、`llm_text_value`、`llm_num_value`、`original_prompt` 等。
+**指标定义文件支持列 (Supported Columns)：**
+*   `indicator_code`: **必填**，必须与测试集一致。
+*   `prompt`: **最核心字段**。若仅有此列与 `indicator_code`，系统将直接使用其作为最高优先级的提取指令。
+*   `definition` / `guidance`: 可选字段。仅在 `prompt` 缺失时，系统会组合这两列作为备选提取指令。
 
 ### 指标值类型
 

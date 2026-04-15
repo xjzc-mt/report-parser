@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ActionIcon, Button, NumberInput, Progress, Switch, Tooltip } from '@mantine/core';
+import { ActionIcon, Button, NumberInput, Progress, Switch, Tooltip, MultiSelect, Text, Badge } from '@mantine/core';
 import {
   IconFileTypePdf,
   IconTableImport,
@@ -17,8 +17,14 @@ import { UploadCard } from './UploadCard.jsx';
 import { ProgressPanel } from './ProgressPanel.jsx';
 import { PdfPageTree } from './PdfPageTree.jsx';
 import { LLMSettingsDrawer } from './LLMSettingsDrawer.jsx';
+import { ModeSelector } from './ModeSelector.jsx';
+import { FullFlowMode } from './FullFlowMode.jsx';
+import { QuickValidationMode } from './QuickValidationMode.jsx';
+import { QuickOptimizationMode } from './QuickOptimizationMode.jsx';
+import { UnifiedAnalysisMerged } from './UnifiedAnalysisMerged.jsx';
 import { DEFAULT_SETTINGS } from '../constants/extraction.js';
 import { DEFAULT_LLM1_SETTINGS, DEFAULT_LLM2_SETTINGS } from '../constants/testBench.js';
+import { parseExcel } from '../services/fileParsers.js';
 import {
   runExtractionPhase,
   runOptimizationPhase,
@@ -27,6 +33,7 @@ import {
   exportLlm1Results,
   parseComparisonFile,
   parseDefinitionFile,
+  refreshComparisonRowsWithCurrentSimilarityRules,
   resetRunState
 } from '../services/testBenchService.js';
 import {
@@ -43,6 +50,7 @@ import {
   getFinalRows
 } from '../services/persistenceService.js';
 import { estimateCost } from '../services/llmClient.js';
+import { initializeSimilarityAssets } from '../services/synonymService.js';
 
 // ── localStorage 持久化 LLM 设置 ─────────────────────────────────────────────
 const LS_LLM1 = 'intelliextract_llm1';
@@ -99,194 +107,6 @@ function TokenStatsBar({ tokenStats, llm1ModelName, llm2ModelName }) {
   );
 }
 
-function SummaryStrip({ rows, showOptimized = false }) {
-  if (!rows || rows.length === 0) return null;
-  const total = rows.length;
-  const matched = rows.filter((r) => r.match_status !== '未匹配').length;
-  const unmatched = total - matched;
-  const matchedRows = rows.filter((r) => r.match_status !== '未匹配');
-  const validSims = matchedRows.map((r) => r.similarity).filter((s) => s !== null && s !== undefined);
-  const avgSim = validSims.length > 0
-    ? Math.round(validSims.reduce((s, v) => s + v, 0) / validSims.length)
-    : 0;
-  return (
-    <div className="summary-strip testbench-summary-strip">
-      <div className="summary-chip"><strong>总数</strong><span>{total}</span></div>
-      <div className="summary-chip"><strong>已匹配</strong><span>{matched}</span></div>
-      <div className="summary-chip"><strong>未匹配</strong><span>{unmatched}</span></div>
-      <div className="summary-chip"><strong>平均相似度</strong><span>{avgSim}%</span></div>
-      {showOptimized && (
-        <div className="summary-chip">
-          <strong>已优化 Prompt</strong>
-          <span>{rows.filter((r) => r.improved_prompt).length}</span>
-        </div>
-      )}
-    </div>
-  );
-}
-
-const NOT_FOUND = '未披露';
-
-function hasLlmOutput(row) {
-  const t = String(row.llm_text_value ?? '').trim();
-  const n = String(row.llm_num_value ?? '').trim();
-  return (t && t !== NOT_FOUND) || (n && n !== NOT_FOUND && n !== '');
-}
-
-function hasGroundTruth(row) {
-  const t = String(row.text_value ?? '').trim();
-  const n = String(row.num_value ?? '').trim();
-  return (t && t !== NOT_FOUND) || (n && n !== NOT_FOUND && n !== '');
-}
-
-function ResultsAnalytics({ rows, similarityThreshold = 70 }) {
-  if (!rows || rows.length === 0) return null;
-  const total = rows.length;
-  const th = similarityThreshold;
-
-  // LLM总输出 = match_status !== '未匹配' 的行（LLM有提取出来，不论相似度）
-  const totalLlmOutput = rows.filter((r) => r.match_status !== '未匹配').length;
-  // TP: LLM有提取 且 相似度达标（用于精确率/准确率）
-  const TP = rows.filter((r) => r.match_status !== '未匹配' && (r.similarity ?? 0) >= th).length;
-  // FP: LLM有实质输出 但 标准答案为空/未披露（过摘录）
-  const FP = rows.filter((r) => hasLlmOutput(r) && !hasGroundTruth(r)).length;
-  // TN: 标准答案为空 且 LLM也无实质输出
-  const TN = rows.filter((r) => !hasGroundTruth(r) && !hasLlmOutput(r)).length;
-
-  const accuracy = total > 0 ? (TP + TN) / total : null;
-  // 精确率 = TP / LLM总输出（分母是LLM总输出，不只是有效输出）
-  const precision = totalLlmOutput > 0 ? TP / totalLlmOutput : null;
-  // 召回率 = LLM成功关联的条数 / 总样本（不用阈值，只要关联成功就算）
-  const recall = total > 0 ? totalLlmOutput / total : null;
-  // 过摘录率 = FP / LLM总输出
-  const overExtractionRate = totalLlmOutput > 0 ? FP / totalLlmOutput : null;
-  const f1 = (precision !== null && recall !== null && (precision + recall) > 0)
-    ? 2 * precision * recall / (precision + recall)
-    : null;
-
-  const pct = (v) => v !== null ? `${Math.round(v * 100)}%` : '—';
-  const cls = (v, invert = false) => {
-    if (v === null) return 'mid';
-    if (invert) return v < 0.1 ? 'good' : v < 0.3 ? 'mid' : 'bad';
-    return v >= 0.8 ? 'good' : v >= 0.6 ? 'mid' : 'bad';
-  };
-
-  return (
-    <div className="results-analytics">
-      <Tooltip
-        label={`(TP+TN)/总样本。TP=${TP} 相似度≥${th}%，TN=${TN} 正确识别未披露，总=${total}。≥80% 良好，60-80% 一般，<60% 需关注。`}
-        multiline w={320} withArrow
-      >
-        <div className={`analytics-chip analytics-chip-${cls(accuracy)}`}>
-          <span className="analytics-chip-label">准确率</span>
-          <span className="analytics-chip-value">{pct(accuracy)}</span>
-          <span className="analytics-chip-sub">{TP + TN}/{total}</span>
-        </div>
-      </Tooltip>
-      <Tooltip
-        label={`达标提取/LLM总输出。分母=${totalLlmOutput}（match_status≠未匹配的全部行），分子=${TP}（相似度≥${th}%）。精确率低说明提取质量不达标。≥80% 良好，<60% 需优化。`}
-        multiline w={340} withArrow
-      >
-        <div className={`analytics-chip analytics-chip-${cls(precision)}`}>
-          <span className="analytics-chip-label">精确率</span>
-          <span className="analytics-chip-value">{pct(precision)}</span>
-          <span className="analytics-chip-sub">{TP}/{totalLlmOutput}</span>
-        </div>
-      </Tooltip>
-      <Tooltip
-        label={`LLM成功关联条数/总样本。分母=${total}（全部样本），分子=${totalLlmOutput}（match_status≠未匹配，不论相似度高低）。召回率低说明漏提取多。≥80% 良好，<60% 漏提取严重。`}
-        multiline w={340} withArrow
-      >
-        <div className={`analytics-chip analytics-chip-${cls(recall)}`}>
-          <span className="analytics-chip-label">召回率</span>
-          <span className="analytics-chip-value">{pct(recall)}</span>
-          <span className="analytics-chip-sub">{totalLlmOutput}/{total}</span>
-        </div>
-      </Tooltip>
-      <Tooltip
-        label={`FP/LLM总输出。FP=${FP}（LLM有输出但标准答案为空/未披露）。过摘录率高说明LLM虚报了不存在的数据。<10% 良好，10-30% 一般，>30% 需关注。`}
-        multiline w={340} withArrow
-      >
-        <div className={`analytics-chip analytics-chip-${cls(overExtractionRate, true)}`}>
-          <span className="analytics-chip-label">过摘录率</span>
-          <span className="analytics-chip-value">{pct(overExtractionRate)}</span>
-          <span className="analytics-chip-sub">FP={FP}</span>
-        </div>
-      </Tooltip>
-      <Tooltip
-        label={`2×精确率×召回率/(精确率+召回率)。精确率和召回率的调和平均，综合衡量提取质量。≥80% 良好，<60% 需大幅优化。`}
-        multiline w={320} withArrow
-      >
-        <div className={`analytics-chip analytics-chip-${cls(f1)}`}>
-          <span className="analytics-chip-label">F1</span>
-          <span className="analytics-chip-value">{pct(f1)}</span>
-        </div>
-      </Tooltip>
-    </div>
-  );
-}
-
-function OptimizationAnalytics({ finalRows, similarityThreshold = 70 }) {
-  if (!finalRows || finalRows.length === 0) return null;
-  const th = similarityThreshold;
-  const total = finalRows.length;
-
-  // 待优化：优化前 similarity < th
-  const pendingCount = finalRows.filter((r) => (r.similarity ?? 0) < th).length;
-  // 已优化：LLM 2 生成了 improved_prompt
-  const optimizedCount = finalRows.filter((r) => r.improved_prompt).length;
-  // 优化成功：improved_prompt 非空 且 post_similarity >= th
-  const successCount = finalRows.filter((r) => r.improved_prompt && (r.post_similarity ?? 0) >= th).length;
-  const successRate = optimizedCount > 0 ? successCount / optimizedCount : null;
-  const rateClass = successRate === null ? 'mid' : successRate >= 0.8 ? 'good' : successRate >= 0.5 ? 'mid' : 'bad';
-
-  // 优化后平均相似度（有 post_similarity 的行）
-  const postRows = finalRows.filter((r) => r.post_similarity !== null && r.post_similarity !== undefined);
-  const avgPostSim = postRows.length > 0
-    ? Math.round(postRows.reduce((s, r) => s + r.post_similarity, 0) / postRows.length)
-    : null;
-
-  return (
-    <div className="results-analytics" style={{ marginTop: 8 }}>
-      <Tooltip label={`finalRows 总行数。`} withArrow>
-        <div className="analytics-chip analytics-chip-mid">
-          <span className="analytics-chip-label">总数</span>
-          <span className="analytics-chip-value">{total}</span>
-          <span className="analytics-chip-sub">条</span>
-        </div>
-      </Tooltip>
-      <Tooltip label={`优化前 similarity < ${th}% 的行数，即需要提升的样本数。`} withArrow>
-        <div className="analytics-chip analytics-chip-mid">
-          <span className="analytics-chip-label">待优化</span>
-          <span className="analytics-chip-value">{pendingCount}</span>
-          <span className="analytics-chip-sub">条</span>
-        </div>
-      </Tooltip>
-      <Tooltip label={`LLM 2 生成了 improved_prompt 的行数（实际执行了优化的样本数）。`} withArrow>
-        <div className={`analytics-chip analytics-chip-${optimizedCount >= pendingCount ? 'good' : optimizedCount > 0 ? 'mid' : 'bad'}`}>
-          <span className="analytics-chip-label">已优化</span>
-          <span className="analytics-chip-value">{optimizedCount}</span>
-          <span className="analytics-chip-sub">条</span>
-        </div>
-      </Tooltip>
-      <Tooltip label={`优化成功 = improved_prompt 非空 且验证后 post_similarity ≥ ${th}%。优化成功率 = 成功条数 / 已优化条数。`} multiline w={300} withArrow>
-        <div className={`analytics-chip analytics-chip-${rateClass}`}>
-          <span className="analytics-chip-label">优化成功率</span>
-          <span className="analytics-chip-value">{successRate !== null ? `${Math.round(successRate * 100)}%` : '—'}</span>
-          <span className="analytics-chip-sub">({successCount}/{optimizedCount})</span>
-        </div>
-      </Tooltip>
-      <Tooltip label={`有循环验证结果的 ${postRows.length} 行的 post_similarity 平均值。`} withArrow>
-        <div className={`analytics-chip analytics-chip-${avgPostSim === null ? 'mid' : avgPostSim >= th ? 'good' : avgPostSim >= th * 0.8 ? 'mid' : 'bad'}`}>
-          <span className="analytics-chip-label">优化后相似度</span>
-          <span className="analytics-chip-value">{avgPostSim !== null ? `${avgPostSim}%` : '—'}</span>
-          <span className="analytics-chip-sub">{postRows.length > 0 ? `(${postRows.length}行)` : ''}</span>
-        </div>
-      </Tooltip>
-    </div>
-  );
-}
-
 function LogPanel({ title, logs, emptyHint = '暂无日志' }) {
   const bodyRef = useRef(null);
   useEffect(() => {
@@ -315,6 +135,10 @@ function LogPanel({ title, logs, emptyHint = '暂无日志' }) {
 const RUN_ID = 'testbench_run';
 
 export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
+  // ── 工作模式状态 ─────────────────────────────────────────────────────────────
+  const stage1AnalysisRef = useRef(null);
+  const [mode, setMode] = useState('full');
+
   // ── LLM 设置（从 localStorage 恢复）────────────────────────────────────────
   const [llm1Settings, setLlm1Settings] = useState(() => loadSettings(LS_LLM1, {
     ...DEFAULT_LLM1_SETTINGS,
@@ -372,6 +196,22 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
   // ── 阶段结果 ───────────────────────────────────────────────────────────────
   const [llm1Rows, setLlm1Rows] = useState(null);
   const [comparisonRows, setComparisonRows] = useState(null);
+  const [selectedCodes, setSelectedCodes] = useState([]); // 选中的待优化指标代码
+
+  // 监听对比结果更新，默认选中不达标的指标
+  useEffect(() => {
+    if (comparisonRows && comparisonRows.length > 0) {
+      const th = llm2Settings.similarityThreshold ?? 70;
+      const codesToOpt = Array.from(new Set(
+        comparisonRows
+          .filter(r => (r.similarity ?? 0) < th)
+          .map(r => r.indicator_code)
+      ));
+      setSelectedCodes(codesToOpt);
+    }
+  }, [comparisonRows, llm2Settings.similarityThreshold]);
+  // 从验收模式跳转时传入的预选优化指标
+  const [preselectedOptCodes, setPreselectedOptCodes] = useState([]);
   const [finalRows, setFinalRows] = useState(null);
   const [iterationDetails, setIterationDetails] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
@@ -379,9 +219,28 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
   // ── 断点恢复提示 ───────────────────────────────────────────────────────────
   const [pendingRunState, setPendingRunState] = useState(null);
 
+  // ── 模式切换处理 ───────────────────────────────────────────────────────────
+  const handleModeChange = (newMode) => {
+    console.log('handleModeChange called:', newMode, 'isRunning:', isRunning);
+    if (isRunning) return;
+    if ((comparisonRows && comparisonRows.length > 0) || finalRows) {
+      if (!window.confirm('切换模式将清空当前结果，是否继续？')) {
+        return;
+      }
+    }
+    console.log('Setting mode to:', newMode);
+    setMode(newMode);
+    setComparisonRows([]);
+    setFinalRows(null);
+  };
+
   // ── 初始化：恢复持久化文件列表、结果和缓存页面 ──────────────────────────────
   useEffect(() => {
     (async () => {
+      try {
+        await initializeSimilarityAssets(parseExcel);
+      } catch (_) { /* ignore */ }
+
       // 生成或复用 session ID（sessionStorage 跨刷新持久，新导航或关闭标签后清空）
       let sessionId = sessionStorage.getItem('wb_session_id');
       if (!sessionId) {
@@ -427,7 +286,11 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
       // 恢复阶段一关联结果
       try {
         const rows = await getComparisonRows(RUN_ID);
-        if (rows && rows.length > 0) setComparisonRows(rows);
+        if (rows && rows.length > 0) {
+          const refreshedRows = refreshComparisonRowsWithCurrentSimilarityRules(rows);
+          setComparisonRows(refreshedRows);
+          try { await saveComparisonRows(RUN_ID, refreshedRows); } catch (_) { /* ignore */ }
+        }
       } catch (_) { /* ignore */ }
 
       // 恢复阶段二最终结果
@@ -820,6 +683,16 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
         </div>
       </div>
 
+      {/* ── 模式选择器 ── */}
+      <ModeSelector
+        currentMode={mode}
+        onModeChange={handleModeChange}
+        disabled={isRunning}
+      />
+
+      {/* ── 完整流程模式（当前现有功能） ── */}
+      {mode === 'full' && (
+        <>
       {/* ── 未完成运行提示 ── */}
       {pendingRunState && !isRunning && (
         <div className="testbench-resume-banner">
@@ -850,8 +723,8 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
           icon={<IconTableImport size={26} stroke={1.8} />}
           tag="EXCEL"
           title="测试集文件"
-          hint="含标准答案的测试集 Excel"
-          acceptHint="需含 report_name、indicator_code、pdf_numbers、text_value 列；若未上传定义文件，需额外包含 prompt 列"
+          hint="包含标准答案的测试集 Excel"
+          acceptHint="必传列：report_name, indicator_code, pdf_numbers, text_value, prompt (若未传定义文件)"
           buttonLabel="选择测试集"
           accept=".xlsx,.xls,.csv"
           file={testSetFile}
@@ -867,8 +740,8 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
           icon={<IconBook size={22} stroke={1.8} />}
           tag="EXCEL（可选）"
           title="指标摘录定义文件"
-          hint="含每个指标的官方定义、摘录规则和标准 Prompt"
-          acceptHint="需含 indicator_code、definition、guidance、prompt 列；上传后测试集 prompt 列将被替代"
+          hint="核心包含每个指标的特定提取 Prompt（支持仅有 indicator_code 和 prompt 列）"
+          acceptHint="必传列：indicator_code, prompt。若无 prompt 则组合使用 definition, guidance 列"
           buttonLabel="选择定义文件"
           accept=".xlsx,.xls,.csv"
           file={definitionFile}
@@ -963,51 +836,112 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
               >
                 下载关联文件（{comparisonRows.length} 条）
               </Button>
+              <Button
+                size="sm"
+                radius="xl"
+                variant="default"
+                className="btn-outline"
+                leftSection={<IconDownload size={14} />}
+                onClick={() => void stage1AnalysisRef.current?.exportPanelData?.()}
+              >
+                导出分析数据
+              </Button>
             </div>
           </div>
-          <SummaryStrip rows={comparisonRows} />
-          <ResultsAnalytics rows={comparisonRows} similarityThreshold={llm2Settings.similarityThreshold ?? 70} />
 
-          {/* 阶段二入口 + 循环优化开关 */}
-          <div className="testbench-action testbench-opt-action" style={{ marginTop: 8 }}>
-            <Button
-              size="md"
-              radius="xl"
-              className="btn-primary btn-primary-mantine"
-              disabled={!canStartOptimization}
-              onClick={() => runOptimization(comparisonRows, loopOptEnabled ? llm2Settings.maxOptIterations : 1)}
-              leftSection={<IconSparkles size={15} />}
-            >
-              {isRunning ? '优化中...' : '开始 Prompt 优化'}
-            </Button>
-            <Switch
-              label="循环优化"
-              checked={loopOptEnabled}
-              onChange={(e) => setLoopOptEnabled(e.currentTarget.checked)}
-              disabled={isRunning}
-              size="sm"
-            />
-            <div className="opt-params">
-              <NumberInput
-                label="循环轮数"
-                min={1}
-                max={20}
-                size="xs"
-                style={{ width: 90 }}
-                value={llm2Settings.maxOptIterations || 1}
-                onChange={(val) => handleChangeLlm2('maxOptIterations', Number(val) || 1)}
-                disabled={!loopOptEnabled || isRunning}
-              />
-              <NumberInput
-                label="相似度阈值%"
-                min={0}
-                max={100}
-                size="xs"
-                style={{ width: 100 }}
-                value={llm2Settings.similarityThreshold ?? 70}
-                onChange={(val) => handleChangeLlm2('similarityThreshold', Number(val) ?? 70)}
-                disabled={isRunning}
-              />
+          <UnifiedAnalysisMerged
+            ref={stage1AnalysisRef}
+            comparisonRows={comparisonRows}
+            threshold={llm2Settings.similarityThreshold ?? 70}
+            onThresholdChange={(val) => handleChangeLlm2('similarityThreshold', val)}
+          />
+
+          {/* ── 阶段二：定向 Prompt 优化配置 ── */}
+          <div className="testbench-optimization-config">
+            <div className="config-header">
+              <IconSparkles size={20} color="#6366f1" />
+              <span className="config-title">阶段二：针对性指标优化</span>
+            </div>
+            
+            <div className="config-body">
+              <div className="config-row">
+                <div className="config-label">待优化指标范围</div>
+                <div className="config-input-full">
+                  <MultiSelect
+                    placeholder="选择需要优化的指标代码（默认已选中不达标项）"
+                    data={Array.from(new Set(comparisonRows.map(r => r.indicator_code))).map(code => ({
+                      value: code,
+                      label: `${code} (${comparisonRows.find(r => r.indicator_code === code)?.indicator_name || '未知'})`
+                    }))}
+                    value={selectedCodes}
+                    onChange={setSelectedCodes}
+                    searchable
+                    clearable
+                    hidePickedOptions
+                    maxValues={50}
+                    size="sm"
+                    styles={{ input: { borderRadius: '8px' } }}
+                  />
+                </div>
+              </div>
+
+              <div className="config-grid">
+                <div className="config-item">
+                  <Switch
+                    label="循环迭代优化"
+                    description="对新 Prompt 进行多轮重测与进化"
+                    checked={loopOptEnabled}
+                    onChange={(e) => setLoopOptEnabled(e.currentTarget.checked)}
+                    disabled={isRunning}
+                  />
+                </div>
+                {loopOptEnabled && (
+                  <div className="config-item">
+                    <NumberInput
+                      label="最大循环轮数"
+                      min={1}
+                      max={20}
+                      size="xs"
+                      value={llm2Settings.maxOptIterations || 1}
+                      onChange={(val) => handleChangeLlm2('maxOptIterations', Number(val) || 1)}
+                      disabled={isRunning}
+                    />
+                  </div>
+                )}
+                <div className="config-item">
+                  <NumberInput
+                    label="目标相似度阈值%"
+                    description="达到此分数将提前停止优化"
+                    min={0}
+                    max={100}
+                    size="xs"
+                    value={llm2Settings.similarityThreshold ?? 70}
+                    onChange={(val) => handleChangeLlm2('similarityThreshold', Number(val) ?? 70)}
+                    disabled={isRunning}
+                  />
+                </div>
+              </div>
+
+              <div className="config-actions">
+                <Button
+                  size="md"
+                  radius="xl"
+                  fullWidth
+                  className="btn-primary btn-primary-mantine"
+                  disabled={!canStartOptimization || selectedCodes.length === 0}
+                  onClick={() => {
+                    // 仅对选中的指标进行优化
+                    const filteredRows = comparisonRows.filter(r => selectedCodes.includes(r.indicator_code));
+                    runOptimization(filteredRows, loopOptEnabled ? llm2Settings.maxOptIterations : 1);
+                  }}
+                  leftSection={isRunning ? null : <IconPlayerPlayFilled size={16} />}
+                >
+                  {isRunning ? '正在执行爬坡优化循环...' : `开始优化选中的 ${selectedCodes.length} 个指标`}
+                </Button>
+                {selectedCodes.length === 0 && (
+                  <Text size="xs" c="dimmed" ta="center" mt={4}>请至少选择一个指标进行优化</Text>
+                )}
+              </div>
             </div>
           </div>
         </div>
@@ -1027,25 +961,91 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
         </>
       )}
 
-      {/* ── 阶段二结果 ── */}
+      {/* ── 阶段二结果：详细优化过程追踪视图 ── */}
       {finalRows && (
         <div className="testbench-result-block testbench-result-final">
           <div className="testbench-result-header">
-            <span className="testbench-phase-label">优化结果</span>
-            <Button
-              size="sm"
-              radius="xl"
-              className="btn-primary btn-primary-mantine"
-              leftSection={<IconDownload size={14} />}
-              onClick={() => exportFinalResults(finalRows, tokenStats, iterationDetails)}
-            >
-              下载优化文件（{finalRows.length} 条）
-            </Button>
+            <span className="testbench-phase-label">优化全过程追踪</span>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <Button
+                size="sm"
+                radius="xl"
+                className="btn-primary btn-primary-mantine"
+                leftSection={<IconDownload size={14} />}
+                onClick={() => exportFinalResults(finalRows, tokenStats, iterationDetails)}
+              >
+                下载全量优化文件（多 Sheet）
+              </Button>
+            </div>
           </div>
-          <OptimizationAnalytics
-            finalRows={finalRows}
-            similarityThreshold={llm2Settings.similarityThreshold ?? 70}
-          />
+
+          <div className="optimization-trace-view">
+            <p className="trace-hint">展示每个指标在各轮迭代中的表现。只有当新 Prompt 性能优于当前最佳时，系统才会在 Final Result 中采用它。</p>
+            {iterationDetails && iterationDetails.length > 0 ? (
+              <div className="trace-table-container">
+                <table className="trace-table">
+                  <thead>
+                    <tr>
+                      <th>指标代码</th>
+                      <th>轮次</th>
+                      <th>平均相似度</th>
+                      <th>样本表现 (部分)</th>
+                      <th>状态</th>
+                      <th>使用的 Prompt</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {/* 按指标和轮次排序展示 */}
+                    {Object.entries(
+                      iterationDetails.reduce((acc, d) => {
+                        const key = d.indicator_code;
+                        if (!acc[key]) acc[key] = {};
+                        if (!acc[key][d.iter]) {
+                          acc[key][d.iter] = { 
+                            code: d.indicator_code, 
+                            name: d.indicator_name, 
+                            iter: d.iter, 
+                            avg: d.avg_similarity,
+                            accepted: d.is_accepted,
+                            prompt: d.prompt,
+                            samples: [] 
+                          };
+                        }
+                        acc[key][d.iter].samples.push(`${d.report_name}: ${d.similarity}%`);
+                        return acc;
+                      }, {})
+                    ).map(([code, iters]) => (
+                      Object.values(iters).map((it, idx) => (
+                        <tr key={`${code}-${it.iter}`} className={it.accepted === 'YES' ? 'row-accepted' : it.accepted === 'ORIGINAL' ? 'row-original' : ''}>
+                          {idx === 0 && <td rowSpan={Object.values(iters).length} className="td-code"><strong>{it.code}</strong><br/><small>{it.name}</small></td>}
+                          <td>{it.iter === 0 ? '原始' : `第 ${it.iter} 轮`}</td>
+                          <td><strong>{it.avg}%</strong></td>
+                          <td className="td-samples">
+                            <div className="sample-list">
+                              {it.samples.slice(0, 3).map((s, i) => <span key={i} className="sample-badge">{s}</span>)}
+                              {it.samples.length > 3 && <span>...等 {it.samples.length} 份</span>}
+                            </div>
+                          </td>
+                          <td>
+                            {it.accepted === 'YES' ? <Badge color="green" size="xs">已采纳</Badge> : 
+                             it.accepted === 'ORIGINAL' ? <Badge color="blue" size="xs">基准线</Badge> : 
+                             <Badge color="gray" size="xs">未采用</Badge>}
+                          </td>
+                          <td className="td-prompt">
+                            <Tooltip label={it.prompt} multiline w={500} withArrow>
+                              <div className="prompt-preview">{it.prompt}</div>
+                            </Tooltip>
+                          </td>
+                        </tr>
+                      ))
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="no-data">暂无优化轨迹数据，请确保运行了包含验证步骤的优化流程。</p>
+            )}
+          </div>
         </div>
       )}
 
@@ -1104,6 +1104,36 @@ export function TestWorkbenchTab({ globalSettings = DEFAULT_SETTINGS }) {
           </div>
         </div>
       </div>
+        </>
+      )}
+
+      {/* ── 快速验收模式 ── */}
+      {mode === 'validation' && (
+        <QuickValidationMode
+          globalSettings={globalSettings}
+          llm1Settings={llm1Settings}
+          llm2Settings={llm2Settings}
+          onChangeLlm1={handleChangeLlm1}
+          onChangeLlm2={handleChangeLlm2}
+          onSwitchToOptimization={(rows, preselectedCodes) => {
+            setComparisonRows(rows);
+            setPreselectedOptCodes(preselectedCodes || []);
+            setMode('optimization');
+          }}
+        />
+      )}
+
+      {/* ── 快速优化模式 ── */}
+      {mode === 'optimization' && (
+        <QuickOptimizationMode
+          globalSettings={globalSettings}
+          llm1Settings={llm1Settings}
+          llm2Settings={llm2Settings}
+          onChangeLlm1={handleChangeLlm1}
+          onChangeLlm2={handleChangeLlm2}
+          preselectedCodes={preselectedOptCodes}
+        />
+      )}
 
       {/* ── LLM 配置抽屉 ── */}
       <LLMSettingsDrawer

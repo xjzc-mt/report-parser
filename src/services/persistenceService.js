@@ -157,3 +157,39 @@ export async function clearPhaseResults(runId) {
   await db.delete('phaseResults', `${runId}_comparison`);
   await db.delete('phaseResults', `${runId}_final`);
 }
+
+// ── 快速验收模式结果持久化（固定 key，不依赖 runId）─────────────────────────
+
+const VALIDATION_KEY = 'validation_comparison';
+const VALIDATION_FIELD_MAPPINGS_KEY = 'validation_field_mappings';
+
+export async function saveValidationResults(rows) {
+  const db = await getDb();
+  await db.put('phaseResults', { id: VALIDATION_KEY, rows, savedAt: Date.now() });
+}
+
+export async function getValidationResults() {
+  const db = await getDb();
+  const entry = await db.get('phaseResults', VALIDATION_KEY);
+  return entry?.rows ?? null;
+}
+
+export async function clearValidationResults() {
+  const db = await getDb();
+  await db.delete('phaseResults', VALIDATION_KEY);
+}
+
+export async function saveValidationFieldMappings(fieldMappings) {
+  const db = await getDb();
+  await db.put('phaseResults', {
+    id: VALIDATION_FIELD_MAPPINGS_KEY,
+    fieldMappings,
+    savedAt: Date.now()
+  });
+}
+
+export async function getValidationFieldMappings() {
+  const db = await getDb();
+  const entry = await db.get('phaseResults', VALIDATION_FIELD_MAPPINGS_KEY);
+  return entry?.fieldMappings ?? null;
+}
