@@ -38,6 +38,7 @@ openspec/
 
 # Superpowers temporary files
 .superpowers/
+.worktrees/
 
 # Process ID files
 *.pid
