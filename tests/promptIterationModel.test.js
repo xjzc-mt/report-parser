@@ -53,12 +53,28 @@ test('extractJsonCandidate 只接受 JSON code fence 并继续查找后续合法
   assert.equal(result.source, 'fence');
 });
 
-test('extractJsonCandidate 不接受裸 JSON 片段兜底', () => {
-  assert.deepEqual(extractJsonCandidate('结果如下 {"ok":true}'), {
-    status: 'not_found',
-    parsed: null,
-    source: 'none'
-  });
+test('extractJsonCandidate 回退解析文本中的裸对象 JSON 片段', () => {
+  const result = extractJsonCandidate('结果如下 {"ok":true}，请处理');
+
+  assert.equal(result.status, 'success');
+  assert.deepEqual(result.parsed, { ok: true });
+  assert.equal(result.source, 'fragment');
+});
+
+test('extractJsonCandidate 回退解析文本中的裸数组 JSON 片段', () => {
+  const result = extractJsonCandidate('结果如下 [1,2,3]，请处理');
+
+  assert.equal(result.status, 'success');
+  assert.deepEqual(result.parsed, [1, 2, 3]);
+  assert.equal(result.source, 'fragment');
+});
+
+test('extractJsonCandidate 裸片段非法时返回 invalid 而不是 not_found', () => {
+  const result = extractJsonCandidate('结果如下 {"ok":true，请处理');
+
+  assert.equal(result.status, 'invalid');
+  assert.equal(result.parsed, null);
+  assert.equal(result.source, 'fragment');
 });
 
 test('summarizeParsedJson 对对象和数组生成完整 key 摘要', () => {

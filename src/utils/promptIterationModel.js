@@ -107,11 +107,83 @@ export function extractJsonCandidate(text) {
     }
   }
 
+  const fragmentCandidate = extractFirstJsonFragment(raw);
+  if (fragmentCandidate !== null) {
+    try {
+      return { status: 'success', parsed: JSON.parse(fragmentCandidate), source: 'fragment' };
+    } catch (_) {
+      return { status: 'invalid', parsed: null, source: 'fragment' };
+    }
+  }
+
   if (sawJsonFence) {
     return { status: 'invalid', parsed: null, source: 'fence' };
   }
 
   return { status: 'not_found', parsed: null, source: 'none' };
+}
+
+function extractFirstJsonFragment(text) {
+  const firstOpen = text.search(/[\[{]/);
+  if (firstOpen === -1) {
+    return null;
+  }
+
+  const open = text[firstOpen];
+  const close = open === '{' ? '}' : ']';
+  const stack = [close];
+  let inString = false;
+  let escaped = false;
+
+  for (let index = firstOpen + 1; index < text.length; index += 1) {
+    const char = text[index];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{') {
+      stack.push('}');
+      continue;
+    }
+
+    if (char === '[') {
+      stack.push(']');
+      continue;
+    }
+
+    if (char === '}' || char === ']') {
+      const expected = stack[stack.length - 1];
+      if (char !== expected) {
+        return text.slice(firstOpen);
+      }
+
+      stack.pop();
+      if (stack.length === 0) {
+        return text.slice(firstOpen, index + 1);
+      }
+    }
+  }
+
+  return text.slice(firstOpen);
 }
 
 export function summarizeParsedJson(value) {
