@@ -26,9 +26,9 @@ export function MethodologyTab() {
       <div className="section-heading">
         <h2 className="section-title">
           <IconBooks size={20} stroke={1.8} />
-          <span>Methodology / 方法论</span>
+          <span>说明文档</span>
         </h2>
-        <p className="section-caption">将原来折叠在首页的说明拆成独立 tab，便于边看边配置。</p>
+        <p className="section-caption">将说明整理为独立文档，便于边看边配置。</p>
       </div>
 
       <div className="methodology-content">

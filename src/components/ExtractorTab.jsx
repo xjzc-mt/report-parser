@@ -54,6 +54,8 @@ function toSelectData(values) {
 }
 
 export function ExtractorTab({
+  title = '工作台',
+  caption = '先配置提取策略，再拖入文件开始运行。你可以在同一页面里查看进度、过滤结果并导出 Excel。',
   canStart,
   hasApiKey,
   isRunning,
@@ -87,11 +89,9 @@ export function ExtractorTab({
         <div className="section-heading workspace-heading">
           <h2 className="section-title">
             <IconLayoutDashboard size={20} stroke={1.8} />
-            <span>工作台</span>
+            <span>{title}</span>
           </h2>
-          <p className="section-caption">
-            先配置提取策略，再拖入文件开始运行。你可以在同一页面里查看进度、过滤结果并导出 Excel。
-          </p>
+          <p className="section-caption">{caption}</p>
         </div>
 
         <section className="panel-block workbench-settings">
