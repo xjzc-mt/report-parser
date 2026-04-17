@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   clipPromptIterationHistory,
   normalizePromptIterationDraft,
+  supportsPromptIterationPdfProvider,
   runPromptIteration
 } from '../src/services/promptIterationService.js';
 
@@ -138,6 +139,60 @@ test('runPromptIteration 缺失 file 时按单文件错误记录并继续后续�
   assert.match(result.results[0].errorMessage, /缺少 PDF 文件/);
   assert.equal(result.results[1].status, 'success');
   assert.equal(callCount, 1);
+});
+
+test('runPromptIteration 非 Gemini provider 会直接拒绝运行 PDF 实验', async () => {
+  let llmCallCount = 0;
+
+  await assert.rejects(
+    () => runPromptIteration({
+      name: '社会指标',
+      systemPrompt: '只返回 JSON',
+      userPrompt: '提取',
+      files: [{ id: 'a', file: { name: 'A.pdf' }, pageSpec: '' }],
+      llmSettings: {
+        apiUrl: 'https://api.openai.example.com/v1',
+        apiKey: 'k',
+        modelName: 'gpt-4.1',
+        providerType: 'openai'
+      }
+    }, {
+      fileToBase64: async () => 'FULL:BASE64',
+      callLLMWithRetry: async () => {
+        llmCallCount += 1;
+        return { text: '{}', usage: { input_tokens: 1, output_tokens: 1 } };
+      }
+    }),
+    /仅支持 Gemini PDF 直传/
+  );
+
+  assert.equal(llmCallCount, 0);
+});
+
+test('supportsPromptIterationPdfProvider 仅放行 Gemini PDF 直传 provider', () => {
+  assert.equal(
+    supportsPromptIterationPdfProvider({
+      providerType: 'gemini',
+      apiUrl: 'https://generativelanguage.googleapis.com/v1beta'
+    }),
+    true
+  );
+
+  assert.equal(
+    supportsPromptIterationPdfProvider({
+      providerType: 'anthropic',
+      apiUrl: 'https://api.anthropic.com'
+    }),
+    false
+  );
+
+  assert.equal(
+    supportsPromptIterationPdfProvider({
+      providerType: '',
+      apiUrl: 'https://generativelanguage.googleapis.com/v1beta'
+    }),
+    true
+  );
 });
 
 test('clipPromptIterationHistory 只保留最近 20 条历史', () => {

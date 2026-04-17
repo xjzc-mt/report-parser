@@ -1,4 +1,5 @@
 import { openDB } from 'idb';
+import { normalizePromptIterationDraft } from './promptIterationService.js';
 
 const DB_NAME = 'intelliextract';
 const DB_VERSION = 2;
@@ -79,7 +80,15 @@ function getDb() {
 
 export async function saveFile(id, name, type, arrayBuffer, lastModified = null) {
   const db = await getDb();
-  await db.put('files', { id, name, type, data: arrayBuffer, lastModified, uploadedAt: Date.now() });
+  await db.put('files', {
+    id,
+    name,
+    type,
+    data: arrayBuffer,
+    lastModified,
+    size: arrayBuffer?.byteLength ?? null,
+    uploadedAt: Date.now()
+  });
 }
 
 export async function getFile(id) {
@@ -214,6 +223,16 @@ const VALIDATION_KEY = 'validation_comparison';
 const VALIDATION_FIELD_MAPPINGS_KEY = 'validation_field_mappings';
 const PROMPT_ITERATION_DRAFT_KEY = 'prompt_iteration_draft';
 const PROMPT_ITERATION_HISTORY_KEY = 'prompt_iteration_history';
+const PROMPT_ITERATION_FILE_TYPE = 'prompt_iteration_pdf';
+const PROMPT_ITERATION_FILE_PREFIX = 'prompt_iteration__';
+
+function getPromptIterationFileStorageId(fileId) {
+  return `${PROMPT_ITERATION_FILE_PREFIX}${fileId}`;
+}
+
+function hasPersistablePromptIterationFile(item) {
+  return Boolean(item?.file && typeof item.file.arrayBuffer === 'function');
+}
 
 export async function saveValidationResults(rows) {
   const db = await getDb();
@@ -259,6 +278,71 @@ export async function getPromptIterationDraft() {
   const db = await getDb();
   const entry = await db.get('phaseResults', PROMPT_ITERATION_DRAFT_KEY);
   return entry?.draft ?? null;
+}
+
+export async function savePromptIterationDraftFiles(files) {
+  const currentFiles = Array.isArray(files) ? files : [];
+  const existingRecords = await listFiles(PROMPT_ITERATION_FILE_TYPE);
+  const recordById = new Map(existingRecords.map((item) => [item.id, item]));
+  const expectedIds = new Set(currentFiles.map((item) => getPromptIterationFileStorageId(item?.id || '')));
+
+  await Promise.all(
+    existingRecords
+      .filter((item) => !expectedIds.has(item.id))
+      .map((item) => deleteFile(item.id))
+  );
+
+  await Promise.all(currentFiles.map(async (item) => {
+    if (!item?.id || !hasPersistablePromptIterationFile(item)) {
+      return;
+    }
+
+    const storageId = getPromptIterationFileStorageId(item.id);
+    const existing = recordById.get(storageId);
+    const file = item.file;
+
+    if (
+      existing &&
+      existing.name === file.name &&
+      existing.type === PROMPT_ITERATION_FILE_TYPE &&
+      existing.lastModified === (file.lastModified ?? null) &&
+      existing.size === file.size
+    ) {
+      return;
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+    await saveFile(storageId, file.name, PROMPT_ITERATION_FILE_TYPE, arrayBuffer, file.lastModified ?? null);
+  }));
+}
+
+export async function restorePromptIterationDraftFiles(rawDraft) {
+  const draft = normalizePromptIterationDraft(rawDraft);
+  const restoredFiles = await Promise.all(draft.files.map(async (item) => {
+    const record = await getFile(getPromptIterationFileStorageId(item.id));
+
+    if (!record?.data) {
+      return {
+        ...item,
+        file: null
+      };
+    }
+
+    return {
+      ...item,
+      name: item.name || record.name || '',
+      type: item.type || 'application/pdf',
+      file: new File([record.data], record.name || item.name || 'restored.pdf', {
+        type: 'application/pdf',
+        lastModified: typeof record.lastModified === 'number' ? record.lastModified : Date.now()
+      })
+    };
+  }));
+
+  return {
+    ...draft,
+    files: restoredFiles
+  };
 }
 
 export async function savePromptIterationHistory(history) {

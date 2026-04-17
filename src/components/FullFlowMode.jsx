@@ -6,13 +6,16 @@ import { DEFAULT_LLM1_SETTINGS } from '../constants/testBench.js';
 import {
   getPromptIterationDraft,
   getPromptIterationHistory,
+  restorePromptIterationDraftFiles,
   savePromptIterationDraft,
+  savePromptIterationDraftFiles,
   savePromptIterationHistory
 } from '../services/persistenceService.js';
 import {
   runPromptIteration,
   clipPromptIterationHistory,
-  normalizePromptIterationDraft
+  normalizePromptIterationDraft,
+  supportsPromptIterationPdfProvider
 } from '../services/promptIterationService.js';
 import { LS_LLM1, mergeLlmSettings } from '../utils/testSetWorkbenchSettings.js';
 import { PromptIterationConfigPanel } from './promptIteration/PromptIterationConfigPanel.jsx';
@@ -21,19 +24,6 @@ import { PromptIterationResultsPanel } from './promptIteration/PromptIterationRe
 
 function hasAttachedFile(item) {
   return Boolean(item?.file && typeof item.file.arrayBuffer === 'function');
-}
-
-function restorePromptIterationDraft(rawDraft) {
-  const normalizedDraft = normalizePromptIterationDraft(rawDraft);
-  const rawFiles = Array.isArray(rawDraft?.files) ? rawDraft.files : [];
-
-  return {
-    ...normalizedDraft,
-    files: normalizedDraft.files.map((item, index) => ({
-      ...item,
-      file: rawFiles[index]?.file ?? null
-    }))
-  };
 }
 
 function mergePromptIterationLlmSettings(input) {
@@ -79,12 +69,16 @@ export function FullFlowMode({ llmSettings, vm }) {
     () => normalizePromptIterationDraft(draft),
     [draft]
   );
+  const supportsPdfUpload = useMemo(
+    () => supportsPromptIterationPdfProvider(effectiveLlmSettings),
+    [effectiveLlmSettings]
+  );
 
   useEffect(() => {
     let isCancelled = false;
 
     (async () => {
-      const savedDraft = restorePromptIterationDraft(await getPromptIterationDraft());
+      const savedDraft = await restorePromptIterationDraftFiles(await getPromptIterationDraft());
       const savedHistory = clipPromptIterationHistory(await getPromptIterationHistory());
 
       if (isCancelled) {
@@ -108,6 +102,13 @@ export function FullFlowMode({ llmSettings, vm }) {
     savePromptIterationDraft(persistedDraft).catch(() => {});
   }, [persistedDraft, hasHydrated]);
 
+  useEffect(() => {
+    if (!hasHydrated) {
+      return;
+    }
+    savePromptIterationDraftFiles(draft.files).catch(() => {});
+  }, [draft.files, hasHydrated]);
+
   const runnableFiles = useMemo(
     () => draft.files.filter((item) => hasAttachedFile(item)),
     [draft.files]
@@ -125,6 +126,7 @@ export function FullFlowMode({ llmSettings, vm }) {
     effectiveLlmSettings.apiKey &&
     effectiveLlmSettings.modelName &&
     effectiveLlmSettings.apiUrl &&
+    supportsPdfUpload &&
     !isRunning
   );
 
@@ -193,10 +195,17 @@ export function FullFlowMode({ llmSettings, vm }) {
         </div>
       ) : null}
 
+      {!supportsPdfUpload ? (
+        <div className="prompt-iteration-hint-banner warning">
+          当前 Prompt 快速迭代仅支持 Gemini PDF 直传。切换到 Gemini Provider 后才能运行。
+        </div>
+      ) : null}
+
       <PromptIterationConfigPanel
         draft={draft}
         onDraftChange={setDraft}
         llmSettings={effectiveLlmSettings}
+        supportsPdfUpload={supportsPdfUpload}
       />
 
       <PromptIterationFileList

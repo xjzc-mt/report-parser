@@ -11,6 +11,17 @@ async function defaultFileToBase64(file, toBase64) {
   return toBase64(new Uint8Array(arrayBuffer));
 }
 
+export const PROMPT_ITERATION_PROVIDER_ERROR = 'Prompt 快速迭代当前仅支持 Gemini PDF 直传，请切换到 Gemini Provider 后再运行。';
+
+export function supportsPromptIterationPdfProvider(llmSettings) {
+  const providerType = String(llmSettings?.providerType || '').trim();
+  if (providerType) {
+    return providerType === 'gemini';
+  }
+
+  return String(llmSettings?.apiUrl || '').includes('googleapis.com');
+}
+
 export function normalizePromptIterationDraft(raw) {
   const draft = raw && typeof raw === 'object' ? raw : {};
 
@@ -41,6 +52,10 @@ export async function runPromptIteration(input, deps = {}) {
     fileToBase64 = (file) => defaultFileToBase64(file, toBase64),
     now = () => Date.now()
   } = deps;
+
+  if (!supportsPromptIterationPdfProvider(input?.llmSettings)) {
+    throw new Error(PROMPT_ITERATION_PROVIDER_ERROR);
+  }
 
   const results = [];
 
