@@ -1,10 +1,12 @@
-import { Suspense, lazy, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Header } from './components/Header.jsx';
-import { ExtractorTab } from './components/ExtractorTab.jsx';
+import { OnlineValidationWorkbench } from './components/OnlineValidationWorkbench.jsx';
+import { DataPreprocessingWorkbench } from './components/DataPreprocessingWorkbench.jsx';
 import { MethodologyTab } from './components/MethodologyTab.jsx';
 import { DEFAULT_SETTINGS } from './constants/extraction.js';
 import { exportResultsToExcel } from './services/exportService.js';
 import { resolveApiKey, runExtractionJob } from './services/extractionService.js';
+import { LS_ACTIVE_APP_TAB, normalizeAppTabKey } from './utils/labNavigationState.js';
 import { getSelectedIndicatorTypes, isResultFound } from './utils/extraction.js';
 
 const LS_SETTINGS = 'intelliextract_settings';
@@ -20,10 +22,6 @@ function loadGlobalSettings() {
 function saveGlobalSettings(settings) {
   try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (_) { /* ignore */ }
 }
-
-const CompressorTab = lazy(() => import('./components/CompressorTab.jsx').then((module) => ({
-  default: module.CompressorTab
-})));
 
 const TestWorkbenchTab = lazy(() => import('./components/TestWorkbenchTab.jsx').then((module) => ({
   default: module.TestWorkbenchTab
@@ -53,9 +51,16 @@ function getFileIdentity(file) {
   return `${file.name}__${file.size}__${file.lastModified}`;
 }
 
+function loadActiveTab() {
+  try {
+    return normalizeAppTabKey(localStorage.getItem(LS_ACTIVE_APP_TAB));
+  } catch (_) { /* ignore */ }
+  return normalizeAppTabKey(null);
+}
+
 export default function App() {
-  const [activeTab, setActiveTab] = useState('extract');
-  const [hasVisitedTestbench, setHasVisitedTestbench] = useState(false);
+  const [activeTab, setActiveTab] = useState(loadActiveTab);
+  const [hasVisitedTestbench, setHasVisitedTestbench] = useState(() => loadActiveTab() === 'test-workbench');
   const [settings, setSettings] = useState(loadGlobalSettings);
   const [pdfFiles, setPdfFiles] = useState([]);
   const [requirementsFile, setRequirementsFile] = useState(null);
@@ -79,6 +84,12 @@ export default function App() {
   const canStart = Boolean(
     pdfFiles.length > 0 && requirementsFile && apiKey && settings.modelName.trim() && selectedIndicatorTypes.length > 0
   );
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LS_ACTIVE_APP_TAB, activeTab);
+    } catch (_) { /* ignore */ }
+  }, [activeTab]);
 
   const appendProgress = ({ message, percentage, timestamp }) => {
     setProgress((previous) => ({
@@ -164,7 +175,7 @@ export default function App() {
   };
 
   const handleStart = async () => {
-    setActiveTab('extract');
+    setActiveTab('online-validation');
     setIsRunning(true);
     setResults([]);
     setStats({});
@@ -320,15 +331,16 @@ export default function App() {
       <Header
         activeTab={activeTab}
         onTabChange={(tab) => {
-          if (tab === 'testbench') setHasVisitedTestbench(true);
-          setActiveTab(tab);
+          const nextTab = normalizeAppTabKey(tab);
+          if (nextTab === 'test-workbench') setHasVisitedTestbench(true);
+          setActiveTab(nextTab);
         }}
       />
 
       <div ref={resultsAnchorRef} />
 
-      {activeTab === 'extract' ? (
-        <ExtractorTab
+      {activeTab === 'online-validation' ? (
+        <OnlineValidationWorkbench
           canStart={canStart}
           hasApiKey={Boolean(apiKey)}
           isRunning={isRunning}
@@ -351,17 +363,15 @@ export default function App() {
           onChangeSetting={handleSettingChange}
           onIndicatorTypeToggle={handleIndicatorTypeToggle}
         />
-      ) : activeTab === 'compress' ? (
-        <Suspense fallback={<section className="glass-panel main-panel"><p className="section-caption">正在加载 PDF 压缩器...</p></section>}>
-          <CompressorTab />
-        </Suspense>
-      ) : activeTab === 'methodology' ? (
+      ) : activeTab === 'data-prep' ? (
+        <DataPreprocessingWorkbench globalSettings={settings} apiKey={apiKey} />
+      ) : activeTab === 'docs' ? (
         <MethodologyTab />
       ) : null}
 
       {/* TestWorkbenchTab 首次访问后持续挂载，防止切换 tab 时运行状态丢失 */}
       {hasVisitedTestbench && (
-        <div style={{ display: activeTab === 'testbench' ? 'block' : 'none' }}>
+        <div style={{ display: activeTab === 'test-workbench' ? 'block' : 'none' }}>
           <Suspense fallback={<section className="glass-panel main-panel"><p className="section-caption">正在加载测试集工作台...</p></section>}>
             <TestWorkbenchTab globalSettings={settings} />
           </Suspense>
