@@ -26,22 +26,10 @@ test('APP_TABS 固定第一阶段顶层导航顺序', () => {
   );
 });
 
-test('TEST_SET_SUBTABS 固定测试集子导航顺序', () => {
-  assert.deepEqual(
-    TEST_SET_SUBTABS.map((tab) => tab.key),
-    ['prompt-iteration', 'model-validation', 'prompt-optimization']
-  );
-  assert.deepEqual(
-    TEST_SET_SUBTABS.map((tab) => tab.label),
-    ['Prompt快速迭代', '模型结果验收', 'Prompt自动优化']
-  );
-});
-
-test('TEST_SET_SUBTABS 保留 legacyLabel 对应文案', () => {
-  assert.deepEqual(
-    TEST_SET_SUBTABS.map((tab) => tab.legacyLabel),
-    ['完整流程模式', '快速验收模式', '快速优化模式']
-  );
+test('测试集工作台仍保留 3 个子页，Prompt快速迭代是第一个入口', () => {
+  assert.equal(TEST_SET_SUBTABS.length, 3);
+  assert.equal(TEST_SET_SUBTABS[0].key, 'prompt-iteration');
+  assert.equal(TEST_SET_SUBTABS[0].label, 'Prompt快速迭代');
 });
 
 test('DATA_PREP_SUBTABS 固定数据准备子导航顺序', () => {

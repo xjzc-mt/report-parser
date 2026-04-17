@@ -676,7 +676,9 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS }) {
         ))}
       </div>
 
-      {currentSubtab === 'prompt-iteration' && <FullFlowMode vm={vm} />}
+      {currentSubtab === 'prompt-iteration' && (
+        <FullFlowMode llmSettings={llm1Settings} />
+      )}
 
       {currentSubtab === 'model-validation' && (
         <QuickValidationMode
