@@ -21,6 +21,11 @@ test('parsePromptIterationPageSpec 识别非法页码', () => {
   assert.match(result.error, /页码格式/);
 });
 
+test('parsePromptIterationPageSpec 严格拒绝字母尾缀页码片段', () => {
+  assert.equal(parsePromptIterationPageSpec('12a').valid, false);
+  assert.equal(parsePromptIterationPageSpec('1-3a').valid, false);
+});
+
 test('extractJsonCandidate 优先解析完整 JSON，再回退到代码块 JSON', () => {
   assert.deepEqual(extractJsonCandidate('{"a":1}'), {
     status: 'success',
@@ -34,7 +39,21 @@ test('extractJsonCandidate 优先解析完整 JSON，再回退到代码块 JSON'
   assert.equal(fromFence.source, 'fence');
 });
 
-test('summarizeParsedJson 对对象和数组生成可读摘要', () => {
-  assert.equal(summarizeParsedJson({ indicator_code: 'A', year: '2024' }), '对象：indicator_code, year');
-  assert.equal(summarizeParsedJson([{ ok: true }, { ok: false }]), '数组：2 项，首项 key 为 ok');
+test('extractJsonCandidate 不接受裸 JSON 片段兜底', () => {
+  assert.deepEqual(extractJsonCandidate('结果如下 {"ok":true}'), {
+    status: 'not_found',
+    parsed: null,
+    source: 'none'
+  });
+});
+
+test('summarizeParsedJson 对对象和数组生成完整 key 摘要', () => {
+  assert.equal(
+    summarizeParsedJson({ indicator_code: 'A', year: '2024', report_name: '报告A' }),
+    '对象：indicator_code, year, report_name'
+  );
+  assert.equal(
+    summarizeParsedJson([{ ok: true, name: 'a', count: 2 }, { ok: false }]),
+    '数组：2 项，首项 key 为 ok, name, count'
+  );
 });

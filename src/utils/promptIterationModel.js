@@ -36,6 +36,22 @@ function makeInvalidPageResult() {
   };
 }
 
+function parseStrictPageToken(token) {
+  if (!/^[1-9]\d*(?:-[1-9]\d*)?$/.test(token)) {
+    return null;
+  }
+
+  const [startRaw, endRaw] = token.split('-');
+  const start = Number(startRaw);
+  const end = endRaw === undefined ? start : Number(endRaw);
+
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end < start) {
+    return null;
+  }
+
+  return { start, end };
+}
+
 export function parsePromptIterationPageSpec(value) {
   const raw = String(value || '').trim();
   if (!raw) {
@@ -47,27 +63,14 @@ export function parsePromptIterationPageSpec(value) {
     const part = chunk.trim();
     if (!part) continue;
 
-    if (part.includes('-')) {
-      const [startRaw, endRaw, ...rest] = part.split('-').map((item) => item.trim());
-      if (rest.length > 0) return makeInvalidPageResult();
-
-      const start = Number.parseInt(startRaw, 10);
-      const end = Number.parseInt(endRaw, 10);
-      if (!Number.isInteger(start) || !Number.isInteger(end) || start <= 0 || end < start) {
-        return makeInvalidPageResult();
-      }
-
-      for (let page = start; page <= end; page += 1) {
-        pages.push(page);
-      }
-      continue;
-    }
-
-    const page = Number.parseInt(part, 10);
-    if (!Number.isInteger(page) || page <= 0) {
+    const token = parseStrictPageToken(part);
+    if (!token) {
       return makeInvalidPageResult();
     }
-    pages.push(page);
+
+    for (let page = token.start; page <= token.end; page += 1) {
+      pages.push(page);
+    }
   }
 
   const normalized = normalizePageList(pages);
@@ -95,15 +98,6 @@ export function extractJsonCandidate(text) {
     }
   }
 
-  const bracketMatch = raw.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
-  if (bracketMatch) {
-    try {
-      return { status: 'success', parsed: JSON.parse(bracketMatch[1]), source: 'snippet' };
-    } catch (_) {
-      return { status: 'invalid', parsed: null, source: 'snippet' };
-    }
-  }
-
   return { status: 'not_found', parsed: null, source: 'none' };
 }
 
@@ -111,13 +105,13 @@ export function summarizeParsedJson(value) {
   if (Array.isArray(value)) {
     const first = value[0];
     if (first && typeof first === 'object' && !Array.isArray(first)) {
-      return `数组：${value.length} 项，首项 key 为 ${Object.keys(first).slice(0, 3).join(', ')}`;
+      return `数组：${value.length} 项，首项 key 为 ${Object.keys(first).join(', ')}`;
     }
     return `数组：${value.length} 项`;
   }
 
   if (value && typeof value === 'object') {
-    return `对象：${Object.keys(value).slice(0, 4).join(', ')}`;
+    return `对象：${Object.keys(value).join(', ')}`;
   }
 
   return '基础类型';
