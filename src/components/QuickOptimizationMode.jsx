@@ -1,9 +1,13 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Button, Badge, Text } from '@mantine/core';
 import { IconTableImport, IconFileTypePdf, IconSparkles } from '@tabler/icons-react';
 import { UploadCard } from './UploadCard.jsx';
 import { PdfMatchChecker } from './PdfMatchChecker.jsx';
 import { parseComparisonFile, checkPdfMatching, filterRowsByPdfAvailability, runOptimizationPhase, exportFinalResults } from '../services/testBenchService.js';
+import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
+import { resolvePagePreset, resolveRuntimeLlmConfig, getPresetCapabilityError } from '../services/modelPresetResolver.js';
+import { loadPageModelSelection, savePageModelSelection } from '../utils/modelPresetStorage.js';
+import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
 
 function formatExcelFile(file) {
   if (!file) return '';
@@ -15,7 +19,8 @@ function formatPdfFiles(files) {
   return `${files.length} 个文件`;
 }
 
-export function QuickOptimizationMode({ llm2Settings, onChangeLlm2, preselectedCodes = [] }) {
+export function QuickOptimizationMode({ llm2Settings, modelPresets = [], onOpenModelPresetManager, preselectedCodes = [] }) {
+  const [selectedPresetId, setSelectedPresetId] = useState(() => loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION));
   const [comparisonFile, setComparisonFile] = useState(null);
   const [pdfFiles, setPdfFiles] = useState([]);
   const [comparisonRows, setComparisonRows] = useState([]);
@@ -23,6 +28,25 @@ export function QuickOptimizationMode({ llm2Settings, onChangeLlm2, preselectedC
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [finalRows, setFinalRows] = useState([]);
   const [error, setError] = useState('');
+  const selectedPreset = useMemo(
+    () => resolvePagePreset(
+      MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION,
+      modelPresets,
+      { [MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION]: selectedPresetId }
+    ),
+    [modelPresets, selectedPresetId]
+  );
+  const runtimeConfig = useMemo(
+    () => resolveRuntimeLlmConfig(selectedPreset),
+    [selectedPreset]
+  );
+  const capabilityError = useMemo(
+    () => getPresetCapabilityError(
+      selectedPreset,
+      PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION]
+    ),
+    [selectedPreset]
+  );
 
   const handleComparisonFileSelect = async (file) => {
     setComparisonFile(file);
@@ -50,7 +74,7 @@ export function QuickOptimizationMode({ llm2Settings, onChangeLlm2, preselectedC
     ? comparisonRows.filter((r) => preselectedCodes.includes(String(r.indicator_code || '').trim()))
     : comparisonRows;
 
-  const canOptimize = effectiveRows.length > 0 && pdfFiles.length > 0 && !isOptimizing;
+  const canOptimize = effectiveRows.length > 0 && pdfFiles.length > 0 && !isOptimizing && Boolean(runtimeConfig?.apiKey) && !capabilityError;
 
   const handleStartOptimization = async () => {
     setIsOptimizing(true);
@@ -68,7 +92,14 @@ export function QuickOptimizationMode({ llm2Settings, onChangeLlm2, preselectedC
       await runOptimizationPhase({
         pdfFiles,
         comparisonRows: optimizableRows,
-        llm2Settings,
+        llm2Settings: {
+          ...llm2Settings,
+          apiUrl: runtimeConfig.apiUrl,
+          apiKey: runtimeConfig.apiKey,
+          modelName: runtimeConfig.modelName,
+          providerType: runtimeConfig.providerType,
+          capabilities: runtimeConfig.capabilities
+        },
         onProgress: () => {},
         onOptLog: () => {},
         tokenStats
@@ -88,6 +119,31 @@ export function QuickOptimizationMode({ llm2Settings, onChangeLlm2, preselectedC
 
   return (
     <div className="quick-optimization-mode">
+      <div className="panel-block" style={{ marginBottom: 16 }}>
+        <div className="panel-header">
+          <div>
+            <h3>当前模型预设</h3>
+            <p>Prompt 自动优化只从统一预设里选模型，不再在页面内直配 API。</p>
+          </div>
+          {onOpenModelPresetManager ? (
+            <Button size="xs" radius="xl" variant="default" onClick={onOpenModelPresetManager}>
+              管理模型预设
+            </Button>
+          ) : null}
+        </div>
+        <PagePresetSelect
+          presets={modelPresets}
+          value={selectedPreset?.id || selectedPresetId}
+          onChange={(presetId) => {
+            setSelectedPresetId(presetId);
+            savePageModelSelection(MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION, presetId);
+          }}
+          requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION]}
+        />
+        {capabilityError ? (
+          <div style={{ marginTop: 8, color: '#fca5a5' }}>{capabilityError}</div>
+        ) : null}
+      </div>
       <div className="testbench-upload-grid">
         <UploadCard
           icon={<IconTableImport size={26} stroke={1.8} />}

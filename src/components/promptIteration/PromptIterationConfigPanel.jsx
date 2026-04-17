@@ -6,7 +6,7 @@ const PROVIDER_LABELS = {
   openai: 'OpenAI 兼容'
 };
 
-export function PromptIterationConfigPanel({ draft, onDraftChange, llmSettings, supportsPdfUpload }) {
+export function PromptIterationConfigPanel({ draft, onDraftChange, llmSettings, presetName, supportsPdfUpload }) {
   const updateField = (key, value) => {
     onDraftChange((previous) => ({
       ...previous,
@@ -58,7 +58,7 @@ export function PromptIterationConfigPanel({ draft, onDraftChange, llmSettings, 
         <aside className="prompt-iteration-model-summary">
           <span className="prompt-iteration-model-label">当前模型摘要</span>
           <strong className="prompt-iteration-model-name">
-            {llmSettings?.modelName || '未配置模型'}
+            {presetName || llmSettings?.modelName || '未配置模型'}
           </strong>
           <div className="prompt-iteration-model-badges">
             <Badge variant="light" color="blue" radius="xl">{providerLabel}</Badge>
@@ -79,7 +79,7 @@ export function PromptIterationConfigPanel({ draft, onDraftChange, llmSettings, 
           </div>
           {!supportsPdfUpload ? (
             <p className="section-caption">
-              当前页面只支持 Gemini PDF 直传。Anthropic 和 OpenAI 兼容接口不会携带 PDF，因此此配置下不可运行。
+              当前页面要求 PDF 直传能力。请切换到支持 PDF 直传的模型预设后再运行。
             </p>
           ) : null}
           <dl className="prompt-iteration-model-meta">

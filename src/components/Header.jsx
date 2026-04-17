@@ -1,7 +1,8 @@
-import { IconBooks, IconFileTypePdf, IconFlask, IconLayoutDashboard } from '@tabler/icons-react';
+import { ActionIcon, Tooltip } from '@mantine/core';
+import { IconBooks, IconFileTypePdf, IconFlask, IconLayoutDashboard, IconSettings } from '@tabler/icons-react';
 import { APP_TABS, LAB_BRAND } from '../constants/labNavigation.js';
 
-export function Header({ activeTab, onTabChange }) {
+export function Header({ activeTab, onTabChange, onOpenModelPresetManager }) {
   const renderTabIcon = (tabKey) => {
     switch (tabKey) {
       case 'test-workbench':
@@ -40,6 +41,19 @@ export function Header({ activeTab, onTabChange }) {
               </button>
             ))}
           </nav>
+        </div>
+        <div className="topbar-right">
+          <Tooltip label="模型预设管理">
+            <ActionIcon
+              variant="default"
+              size="lg"
+              radius="xl"
+              onClick={onOpenModelPresetManager}
+              aria-label="打开模型预设管理"
+            >
+              <IconSettings size={18} stroke={1.8} />
+            </ActionIcon>
+          </Tooltip>
         </div>
       </div>
     </header>

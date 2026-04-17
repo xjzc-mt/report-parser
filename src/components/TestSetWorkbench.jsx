@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ActionIcon, Button, NumberInput, Progress, Switch, Tooltip, MultiSelect, Text, Badge } from '@mantine/core';
 import { IconAlertCircle, IconFlask, IconRefresh, IconSettings } from '@tabler/icons-react';
-import { LLMSettingsDrawer } from './LLMSettingsDrawer.jsx';
 import { FullFlowMode } from './FullFlowMode.jsx';
 import { QuickValidationMode } from './QuickValidationMode.jsx';
 import { QuickOptimizationMode } from './QuickOptimizationMode.jsx';
@@ -116,7 +115,7 @@ function LogPanel({ title, logs, emptyHint = '暂无日志' }) {
 
 const RUN_ID = 'testbench_run';
 
-export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS }) {
+export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPresets = [], onOpenModelPresetManager }) {
   const stage1AnalysisRef = useRef(null);
   const [activeSubtab, setActiveSubtab] = useState(() => {
     try {
@@ -134,7 +133,6 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS }) {
     apiUrl: globalSettings.apiUrl,
     apiKey: ''
   }));
-  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const handleChangeLlm1 = useCallback((key, val) => {
     setLlm1Settings((prev) => {
@@ -643,8 +641,8 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS }) {
             <p className="section-caption">在完整流程、模型结果验收和 Prompt自动优化之间切换。</p>
           </div>
           <div className="testbench-header-actions">
-            <Tooltip label="LLM 配置">
-              <ActionIcon variant="default" size="lg" radius="xl" onClick={() => setSettingsOpen(true)} disabled={isRunning}>
+            <Tooltip label="模型预设管理">
+              <ActionIcon variant="default" size="lg" radius="xl" onClick={onOpenModelPresetManager} disabled={isRunning}>
                 <IconSettings size={16} stroke={1.8} />
               </ActionIcon>
             </Tooltip>
@@ -677,7 +675,7 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS }) {
       </div>
 
       {currentSubtab === 'prompt-iteration' && (
-        <FullFlowMode llmSettings={llm1Settings} />
+        <FullFlowMode llmSettings={llm1Settings} modelPresets={modelPresets} />
       )}
 
       {currentSubtab === 'model-validation' && (
@@ -698,23 +696,12 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS }) {
 
       {currentSubtab === 'prompt-optimization' && (
         <QuickOptimizationMode
-          globalSettings={globalSettings}
-          llm1Settings={llm1Settings}
           llm2Settings={llm2Settings}
-          onChangeLlm1={handleChangeLlm1}
-          onChangeLlm2={handleChangeLlm2}
+          modelPresets={modelPresets}
+          onOpenModelPresetManager={onOpenModelPresetManager}
           preselectedCodes={preselectedOptCodes}
         />
       )}
-
-      <LLMSettingsDrawer
-        opened={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        llm1Settings={llm1Settings}
-        llm2Settings={llm2Settings}
-        onChangeLlm1={handleChangeLlm1}
-        onChangeLlm2={handleChangeLlm2}
-      />
     </section>
   );
 }
