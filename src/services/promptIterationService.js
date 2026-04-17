@@ -6,6 +6,11 @@ import {
 import { callLLMWithRetry } from './llmClient.js';
 import { extractPdfPages, uint8ArrayToBase64 } from './pdfPageExtractor.js';
 
+async function defaultFileToBase64(file, toBase64) {
+  const arrayBuffer = await file.arrayBuffer();
+  return toBase64(new Uint8Array(arrayBuffer));
+}
+
 export function normalizePromptIterationDraft(raw) {
   const draft = raw && typeof raw === 'object' ? raw : {};
 
@@ -33,6 +38,7 @@ export async function runPromptIteration(input, deps = {}) {
     callLLMWithRetry: call = callLLMWithRetry,
     extractPdfPages: extractPages = extractPdfPages,
     uint8ArrayToBase64: toBase64 = uint8ArrayToBase64,
+    fileToBase64 = (file) => defaultFileToBase64(file, toBase64),
     now = () => Date.now()
   } = deps;
 
@@ -40,12 +46,34 @@ export async function runPromptIteration(input, deps = {}) {
 
   for (const item of input.files) {
     const startedAt = now();
+    const file = item?.file;
+    const fileName = typeof file?.name === 'string' && file.name.trim() ? file.name : '';
+
+    if (!file || !fileName) {
+      results.push({
+        fileId: item?.id,
+        fileName,
+        pageSpec: item?.pageSpec || '',
+        resolvedPages: [],
+        scopeLabel: '文件错误',
+        status: 'error',
+        errorMessage: '缺少 PDF 文件或文件名',
+        rawResponse: '',
+        parsedJson: null,
+        jsonParseStatus: 'not_found',
+        summaryText: '文件错误',
+        usage: { input_tokens: 0, output_tokens: 0 },
+        durationMs: now() - startedAt
+      });
+      continue;
+    }
+
     const parsedPageSpec = parsePromptIterationPageSpec(item.pageSpec);
 
     if (!parsedPageSpec.valid) {
       results.push({
         fileId: item.id,
-        fileName: item.file.name,
+        fileName,
         pageSpec: item.pageSpec,
         resolvedPages: [],
         scopeLabel: '页码错误',
@@ -62,12 +90,12 @@ export async function runPromptIteration(input, deps = {}) {
     }
 
     try {
-      let pdfBase64 = null;
+      let pdfBase64 = await fileToBase64(file);
       let resolvedPages = [];
       let scopeLabel = '全文';
 
       if (parsedPageSpec.pages.length > 0) {
-        const extracted = await extractPages(item.file, parsedPageSpec.pages, item.file.name);
+        const extracted = await extractPages(file, parsedPageSpec.pages, fileName);
         pdfBase64 = toBase64(extracted.pdfData);
         resolvedPages = parsedPageSpec.pages;
         scopeLabel = `指定页：${parsedPageSpec.normalized}`;
@@ -86,7 +114,7 @@ export async function runPromptIteration(input, deps = {}) {
       const parsed = extractJsonCandidate(response.text);
       results.push({
         fileId: item.id,
-        fileName: item.file.name,
+        fileName,
         pageSpec: item.pageSpec,
         resolvedPages,
         scopeLabel,
@@ -102,7 +130,7 @@ export async function runPromptIteration(input, deps = {}) {
     } catch (error) {
       results.push({
         fileId: item.id,
-        fileName: item.file.name,
+        fileName,
         pageSpec: item.pageSpec,
         resolvedPages: parsedPageSpec.pages,
         scopeLabel: parsedPageSpec.pages.length > 0 ? `指定页：${parsedPageSpec.normalized}` : '全文',
