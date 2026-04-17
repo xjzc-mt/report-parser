@@ -25,16 +25,13 @@ function hasAttachedFile(item) {
 
 function restorePromptIterationDraft(rawDraft) {
   const normalizedDraft = normalizePromptIterationDraft(rawDraft);
-
-  if (!Array.isArray(rawDraft?.files)) {
-    return normalizedDraft;
-  }
+  const rawFiles = Array.isArray(rawDraft?.files) ? rawDraft.files : [];
 
   return {
     ...normalizedDraft,
     files: normalizedDraft.files.map((item, index) => ({
       ...item,
-      file: rawDraft.files[index]?.file ?? null
+      file: rawFiles[index]?.file ?? null
     }))
   };
 }
@@ -78,6 +75,11 @@ export function FullFlowMode({ llmSettings, vm }) {
     llmSettings ? mergePromptIterationLlmSettings(llmSettings) : loadStoredPromptIterationLlmSettings()
   ), [llmSettings, vm]);
 
+  const persistedDraft = useMemo(
+    () => normalizePromptIterationDraft(draft),
+    [draft]
+  );
+
   useEffect(() => {
     let isCancelled = false;
 
@@ -103,8 +105,8 @@ export function FullFlowMode({ llmSettings, vm }) {
     if (!hasHydrated) {
       return;
     }
-    savePromptIterationDraft(draft).catch(() => {});
-  }, [draft, hasHydrated]);
+    savePromptIterationDraft(persistedDraft).catch(() => {});
+  }, [persistedDraft, hasHydrated]);
 
   const runnableFiles = useMemo(
     () => draft.files.filter((item) => hasAttachedFile(item)),
