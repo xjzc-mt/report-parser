@@ -26,6 +26,12 @@ test('parsePromptIterationPageSpec 严格拒绝字母尾缀页码片段', () => 
   assert.equal(parsePromptIterationPageSpec('1-3a').valid, false);
 });
 
+test('parsePromptIterationPageSpec 将空片段判为非法输入', () => {
+  assert.equal(parsePromptIterationPageSpec('12,,15').valid, false);
+  assert.equal(parsePromptIterationPageSpec('12,').valid, false);
+  assert.equal(parsePromptIterationPageSpec(',12').valid, false);
+});
+
 test('extractJsonCandidate 优先解析完整 JSON，再回退到代码块 JSON', () => {
   assert.deepEqual(extractJsonCandidate('{"a":1}'), {
     status: 'success',
@@ -37,6 +43,14 @@ test('extractJsonCandidate 优先解析完整 JSON，再回退到代码块 JSON'
   assert.equal(fromFence.status, 'success');
   assert.deepEqual(fromFence.parsed, { ok: true });
   assert.equal(fromFence.source, 'fence');
+});
+
+test('extractJsonCandidate 只接受 JSON code fence 并继续查找后续合法 fence', () => {
+  const result = extractJsonCandidate('结果如下\n```ts\nconst ok = true;\n```\n```json\n{"ok":true}\n```');
+
+  assert.equal(result.status, 'success');
+  assert.deepEqual(result.parsed, { ok: true });
+  assert.equal(result.source, 'fence');
 });
 
 test('extractJsonCandidate 不接受裸 JSON 片段兜底', () => {

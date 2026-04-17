@@ -61,7 +61,9 @@ export function parsePromptIterationPageSpec(value) {
   const pages = [];
   for (const chunk of raw.split(',')) {
     const part = chunk.trim();
-    if (!part) continue;
+    if (!part) {
+      return makeInvalidPageResult();
+    }
 
     const token = parseStrictPageToken(part);
     if (!token) {
@@ -89,13 +91,24 @@ export function extractJsonCandidate(text) {
     // ignore whole-text parse failure and continue to structured fallback
   }
 
-  const fenceMatch = raw.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenceMatch) {
-    try {
-      return { status: 'success', parsed: JSON.parse(fenceMatch[1].trim()), source: 'fence' };
-    } catch (_) {
-      return { status: 'invalid', parsed: null, source: 'fence' };
+  const fencePattern = /```([^\n`]*)\n([\s\S]*?)```/g;
+  let sawJsonFence = false;
+  for (const match of raw.matchAll(fencePattern)) {
+    const lang = match[1].trim().toLowerCase();
+    if (lang !== 'json') {
+      continue;
     }
+
+    sawJsonFence = true;
+    try {
+      return { status: 'success', parsed: JSON.parse(match[2].trim()), source: 'fence' };
+    } catch (_) {
+      // keep scanning later json fences
+    }
+  }
+
+  if (sawJsonFence) {
+    return { status: 'invalid', parsed: null, source: 'fence' };
   }
 
   return { status: 'not_found', parsed: null, source: 'none' };
