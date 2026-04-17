@@ -2,8 +2,58 @@ import { openDB } from 'idb';
 
 const DB_NAME = 'intelliextract';
 const DB_VERSION = 2;
+const memoryStores = new Map();
+
+function createMemoryStore(name) {
+  if (!memoryStores.has(name)) {
+    memoryStores.set(name, new Map());
+  }
+  return memoryStores.get(name);
+}
+
+function createMemoryDb() {
+  return {
+    async put(storeName, value) {
+      createMemoryStore(storeName).set(value.id, value);
+    },
+    async get(storeName, key) {
+      return createMemoryStore(storeName).get(key);
+    },
+    async delete(storeName, key) {
+      createMemoryStore(storeName).delete(key);
+    },
+    async getAll(storeName) {
+      return Array.from(createMemoryStore(storeName).values());
+    },
+    async clear(storeName) {
+      createMemoryStore(storeName).clear();
+    },
+    transaction(storeName) {
+      const store = createMemoryStore(storeName);
+      return {
+        store: {
+          async add(value) {
+            const nextId = value.id ?? store.size + 1;
+            store.set(nextId, { ...value, id: nextId });
+            return nextId;
+          },
+          async getAll() {
+            return Array.from(store.values());
+          },
+          async delete(key) {
+            store.delete(key);
+          }
+        },
+        done: Promise.resolve()
+      };
+    }
+  };
+}
 
 function getDb() {
+  if (typeof indexedDB === 'undefined') {
+    return Promise.resolve(createMemoryDb());
+  }
   return openDB(DB_NAME, DB_VERSION, {
     upgrade(db) {
       if (!db.objectStoreNames.contains('files')) {
@@ -162,6 +212,8 @@ export async function clearPhaseResults(runId) {
 
 const VALIDATION_KEY = 'validation_comparison';
 const VALIDATION_FIELD_MAPPINGS_KEY = 'validation_field_mappings';
+const PROMPT_ITERATION_DRAFT_KEY = 'prompt_iteration_draft';
+const PROMPT_ITERATION_HISTORY_KEY = 'prompt_iteration_history';
 
 export async function saveValidationResults(rows) {
   const db = await getDb();
@@ -192,4 +244,34 @@ export async function getValidationFieldMappings() {
   const db = await getDb();
   const entry = await db.get('phaseResults', VALIDATION_FIELD_MAPPINGS_KEY);
   return entry?.fieldMappings ?? null;
+}
+
+export async function savePromptIterationDraft(draft) {
+  const db = await getDb();
+  await db.put('phaseResults', {
+    id: PROMPT_ITERATION_DRAFT_KEY,
+    draft,
+    savedAt: Date.now()
+  });
+}
+
+export async function getPromptIterationDraft() {
+  const db = await getDb();
+  const entry = await db.get('phaseResults', PROMPT_ITERATION_DRAFT_KEY);
+  return entry?.draft ?? null;
+}
+
+export async function savePromptIterationHistory(history) {
+  const db = await getDb();
+  await db.put('phaseResults', {
+    id: PROMPT_ITERATION_HISTORY_KEY,
+    history,
+    savedAt: Date.now()
+  });
+}
+
+export async function getPromptIterationHistory() {
+  const db = await getDb();
+  const entry = await db.get('phaseResults', PROMPT_ITERATION_HISTORY_KEY);
+  return entry?.history ?? [];
 }
