@@ -1,0 +1,253 @@
+import { useEffect, useMemo, useState } from 'react';
+import { Badge, Tabs } from '@mantine/core';
+
+function getRunKey(run, index = 0) {
+  return `${run?.createdAt || 'run'}-${index}`;
+}
+
+function formatDateTime(timestamp) {
+  if (!timestamp) return '未知时间';
+  return new Date(timestamp).toLocaleString('zh-CN', {
+    hour12: false
+  });
+}
+
+function formatDuration(durationMs) {
+  if (durationMs == null) return '-';
+  if (durationMs < 1000) return `${durationMs} ms`;
+  if (durationMs < 10_000) return `${(durationMs / 1000).toFixed(1)} s`;
+  return `${Math.round(durationMs / 1000)} s`;
+}
+
+function formatUsage(usage) {
+  const inputTokens = usage?.input_tokens || 0;
+  const outputTokens = usage?.output_tokens || 0;
+  if (!inputTokens && !outputTokens) {
+    return '-';
+  }
+  return `${inputTokens} / ${outputTokens}`;
+}
+
+function getStatusColor(status) {
+  return status === 'success' ? 'teal' : 'red';
+}
+
+function getStatusLabel(status) {
+  return status === 'success' ? '成功' : '失败';
+}
+
+function getJsonStatusLabel(status) {
+  if (status === 'success') return 'JSON 成功';
+  if (status === 'invalid') return 'JSON 非法';
+  return '未解析出 JSON';
+}
+
+function EmptyState({ text }) {
+  return <div className="prompt-iteration-empty">{text}</div>;
+}
+
+function RunResultsView({ run, title, description }) {
+  if (!run) {
+    return <EmptyState text="还没有可展示的运行结果。" />;
+  }
+
+  return (
+    <div className="prompt-iteration-run-view">
+      <div className="prompt-iteration-section-head">
+        <div>
+          <h3 className="prompt-iteration-section-title">{title}</h3>
+          <p className="section-caption">{description}</p>
+        </div>
+        <div className="prompt-iteration-run-meta">
+          <Badge variant="light" color="blue" radius="xl">{run.name || '未命名实验'}</Badge>
+          <Badge variant="light" color="teal" radius="xl">
+            成功 {run.summary?.successCount || 0}/{run.summary?.total || 0}
+          </Badge>
+          <Badge variant="light" color="gray" radius="xl">
+            {run.modelName || '未记录模型'}
+          </Badge>
+        </div>
+      </div>
+
+      <div className="prompt-iteration-run-submeta">
+        <span>运行时间：{formatDateTime(run.createdAt)}</span>
+        <span>Provider：{run.providerType || '未记录'}</span>
+        <span>失败文件：{run.summary?.errorCount || 0}</span>
+      </div>
+
+      <div className="prompt-iteration-summary-shell">
+        <table className="prompt-iteration-summary-table">
+          <thead>
+            <tr>
+              <th>文件</th>
+              <th>范围</th>
+              <th>状态</th>
+              <th>JSON</th>
+              <th>摘要</th>
+              <th>Tokens</th>
+              <th>耗时</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(run.results || []).map((item) => (
+              <tr key={`${run.createdAt}-${item.fileId || item.fileName}`}>
+                <td>{item.fileName || '未命名文件'}</td>
+                <td>{item.scopeLabel || '全文'}</td>
+                <td>
+                  <Badge variant="light" color={getStatusColor(item.status)} radius="xl">
+                    {getStatusLabel(item.status)}
+                  </Badge>
+                </td>
+                <td>{getJsonStatusLabel(item.jsonParseStatus)}</td>
+                <td>{item.summaryText || '-'}</td>
+                <td>{formatUsage(item.usage)}</td>
+                <td>{formatDuration(item.durationMs)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="prompt-iteration-section-head prompt-iteration-raw-section-head">
+        <div>
+          <h3 className="prompt-iteration-section-title">模型原始返回</h3>
+          <p className="section-caption">
+            原样保留每个文件的回复内容，便于定位结构化成功与失败的具体原因。
+          </p>
+        </div>
+      </div>
+
+      <div className="prompt-iteration-raw-list">
+        {(run.results || []).map((item) => (
+          <article key={`${run.createdAt}-${item.fileId || item.fileName}-raw`} className="prompt-iteration-raw-item">
+            <div className="prompt-iteration-raw-header">
+              <div>
+                <strong>{item.fileName || '未命名文件'}</strong>
+                <div className="prompt-iteration-raw-submeta">
+                  <span>{item.scopeLabel || '全文'}</span>
+                  <span>{formatDuration(item.durationMs)}</span>
+                </div>
+              </div>
+              <Badge variant="light" color={getStatusColor(item.status)} radius="xl">
+                {getStatusLabel(item.status)}
+              </Badge>
+            </div>
+
+            {item.parsedJson ? (
+              <div className="prompt-iteration-json-section">
+                <span className="prompt-iteration-raw-label">解析出的 JSON</span>
+                <pre className="prompt-iteration-raw-block prompt-iteration-json-block">
+                  {JSON.stringify(item.parsedJson, null, 2)}
+                </pre>
+              </div>
+            ) : null}
+
+            <div className="prompt-iteration-raw-section">
+              <span className="prompt-iteration-raw-label">
+                {item.status === 'error' ? '错误信息 / 原始返回' : '原始返回'}
+              </span>
+              <pre className="prompt-iteration-raw-block">
+                {item.rawResponse || item.errorMessage || '暂无返回内容'}
+              </pre>
+            </div>
+          </article>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+export function PromptIterationResultsPanel({
+  activeTab,
+  onTabChange,
+  currentRun,
+  history,
+  errorMsg
+}) {
+  const [selectedHistoryKey, setSelectedHistoryKey] = useState('');
+
+  useEffect(() => {
+    if (!history.length) {
+      setSelectedHistoryKey('');
+      return;
+    }
+
+    setSelectedHistoryKey((previous) => {
+      const exists = history.some((run, index) => getRunKey(run, index) === previous);
+      return exists ? previous : getRunKey(history[0], 0);
+    });
+  }, [history]);
+
+  const selectedHistoryRun = useMemo(
+    () => history.find((run, index) => getRunKey(run, index) === selectedHistoryKey) || history[0] || null,
+    [history, selectedHistoryKey]
+  );
+
+  return (
+    <Tabs
+      value={activeTab}
+      onChange={(value) => onTabChange?.(value || 'current')}
+      className="prompt-iteration-results"
+    >
+      <Tabs.List>
+        <Tabs.Tab value="current">当前结果</Tabs.Tab>
+        <Tabs.Tab value="history">历史记录</Tabs.Tab>
+      </Tabs.List>
+
+      <Tabs.Panel value="current" pt="md">
+        {errorMsg ? (
+          <div className="testbench-error-block prompt-iteration-result-error">
+            <span>{errorMsg}</span>
+          </div>
+        ) : null}
+
+        {currentRun ? (
+          <RunResultsView
+            run={currentRun}
+            title="结果汇总"
+            description="先看统一表格，再往下查看每个文件的原始回复。"
+          />
+        ) : (
+          <EmptyState text="还没有当前运行结果。上传 PDF、填写 Prompt 后即可开始验证。" />
+        )}
+      </Tabs.Panel>
+
+      <Tabs.Panel value="history" pt="md">
+        {history.length === 0 ? (
+          <EmptyState text="还没有历史记录。跑过一次后，这里会保留最近的实验快照。" />
+        ) : (
+          <div className="prompt-iteration-history-layout">
+            <div className="prompt-iteration-history-list">
+              {history.map((run, index) => {
+                const historyKey = getRunKey(run, index);
+                const isActive = historyKey === selectedHistoryKey;
+
+                return (
+                  <button
+                    key={historyKey}
+                    type="button"
+                    className={`prompt-iteration-history-item ${isActive ? 'active' : ''}`}
+                    onClick={() => setSelectedHistoryKey(historyKey)}
+                  >
+                    <strong>{run.name || '未命名实验'}</strong>
+                    <span>{formatDateTime(run.createdAt)}</span>
+                    <span>{run.modelName || '未记录模型'}</span>
+                    <span>成功 {run.summary?.successCount || 0}/{run.summary?.total || 0}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <div className="prompt-iteration-history-detail">
+              <RunResultsView
+                run={selectedHistoryRun}
+                title="历史快照"
+                description="回看某次 Prompt 试跑的完整结果，继续比较不同文件之间的表现。"
+              />
+            </div>
+          </div>
+        )}
+      </Tabs.Panel>
+    </Tabs>
+  );
+}
