@@ -17,7 +17,7 @@ const PdfSplitterTab = lazy(() => import('./PdfSplitterTab.jsx').then((module) =
   default: module.PdfSplitterTab
 })));
 
-export function DataPreprocessingWorkbench({ globalSettings, apiKey }) {
+export function DataPreprocessingWorkbench({ globalSettings, modelPresets, onOpenModelPresetManager }) {
   const [activeSubtab, setActiveSubtab] = useState(() => {
     try {
       return normalizeDataPrepSubtabKey(localStorage.getItem(LS_DATA_PREP_SUBTAB));
@@ -59,7 +59,11 @@ export function DataPreprocessingWorkbench({ globalSettings, apiKey }) {
 
       {currentSubtab === 'chunking' && (
         <Suspense fallback={<section className="glass-panel main-panel"><p className="section-caption">正在加载 PDF 拆分器...</p></section>}>
-          <PdfSplitterTab globalSettings={globalSettings} apiKey={apiKey} />
+          <PdfSplitterTab
+            globalSettings={globalSettings}
+            modelPresets={modelPresets}
+            onOpenModelPresetManager={onOpenModelPresetManager}
+          />
         </Suspense>
       )}
 

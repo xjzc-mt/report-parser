@@ -1,12 +1,17 @@
 import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Header } from './components/Header.jsx';
+import { LLMSettingsDrawer } from './components/LLMSettingsDrawer.jsx';
 import { OnlineValidationWorkbench } from './components/OnlineValidationWorkbench.jsx';
 import { DataPreprocessingWorkbench } from './components/DataPreprocessingWorkbench.jsx';
 import { MethodologyTab } from './components/MethodologyTab.jsx';
 import { DEFAULT_SETTINGS } from './constants/extraction.js';
+import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from './constants/modelPresets.js';
 import { exportResultsToExcel } from './services/exportService.js';
-import { resolveApiKey, runExtractionJob } from './services/extractionService.js';
+import { runExtractionJob } from './services/extractionService.js';
+import { initializeModelPresetSystem } from './services/modelPresetService.js';
+import { getPresetCapabilityError, resolvePagePreset, resolveRuntimeLlmConfig } from './services/modelPresetResolver.js';
 import { LS_ACTIVE_APP_TAB, normalizeAppTabKey } from './utils/labNavigationState.js';
+import { loadPageModelSelection, saveModelPresets, savePageModelSelection } from './utils/modelPresetStorage.js';
 import { getSelectedIndicatorTypes, isResultFound } from './utils/extraction.js';
 
 const LS_SETTINGS = 'intelliextract_settings';
@@ -62,6 +67,11 @@ export default function App() {
   const [activeTab, setActiveTab] = useState(loadActiveTab);
   const [hasVisitedTestbench, setHasVisitedTestbench] = useState(() => loadActiveTab() === 'test-workbench');
   const [settings, setSettings] = useState(loadGlobalSettings);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [modelPresets, setModelPresets] = useState(() => initializeModelPresetSystem(import.meta.env).presets);
+  const [onlineValidationPresetId, setOnlineValidationPresetId] = useState(() => (
+    loadPageModelSelection(MODEL_PAGE_KEYS.ONLINE_VALIDATION)
+  ));
   const [pdfFiles, setPdfFiles] = useState([]);
   const [requirementsFile, setRequirementsFile] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
@@ -75,14 +85,37 @@ export default function App() {
     () => getSelectedIndicatorTypes(settings.indicatorTypes),
     [settings.indicatorTypes]
   );
-  const apiKey = useMemo(() => resolveApiKey(settings), [settings]);
+  const onlineValidationPreset = useMemo(
+    () => resolvePagePreset(
+      MODEL_PAGE_KEYS.ONLINE_VALIDATION,
+      modelPresets,
+      { [MODEL_PAGE_KEYS.ONLINE_VALIDATION]: onlineValidationPresetId }
+    ),
+    [modelPresets, onlineValidationPresetId]
+  );
+  const onlineValidationRuntimeConfig = useMemo(
+    () => resolveRuntimeLlmConfig(onlineValidationPreset),
+    [onlineValidationPreset]
+  );
+  const onlineValidationCapabilityError = useMemo(
+    () => getPresetCapabilityError(
+      onlineValidationPreset,
+      PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.ONLINE_VALIDATION]
+    ),
+    [onlineValidationPreset]
+  );
   const displayedResults = useMemo(
     () => (filterOnlyFound ? results.filter(isResultFound) : results),
     [filterOnlyFound, results]
   );
 
   const canStart = Boolean(
-    pdfFiles.length > 0 && requirementsFile && apiKey && settings.modelName.trim() && selectedIndicatorTypes.length > 0
+    pdfFiles.length > 0 &&
+    requirementsFile &&
+    onlineValidationRuntimeConfig?.apiKey &&
+    onlineValidationRuntimeConfig?.modelName &&
+    selectedIndicatorTypes.length > 0 &&
+    !onlineValidationCapabilityError
   );
 
   useEffect(() => {
@@ -193,7 +226,7 @@ export default function App() {
       const startedAt = new Date();
       let aggregatedResults = [];
       let aggregatedStats = {
-        model: settings.modelName.trim(),
+        model: onlineValidationRuntimeConfig?.modelName || '未配置模型',
         selectedTypes: selectedIndicatorTypes.join(', '),
         startTime: startedAt.toLocaleString(),
         endTime: '',
@@ -256,7 +289,10 @@ export default function App() {
             settings: {
               ...settings,
               indicatorTypes: selectedIndicatorTypes,
-              apiKey
+              apiKey: onlineValidationRuntimeConfig.apiKey,
+              apiUrl: onlineValidationRuntimeConfig.apiUrl,
+              modelName: onlineValidationRuntimeConfig.modelName,
+              providerType: onlineValidationRuntimeConfig.providerType
             },
             onProgress: ({ message, percentage, timestamp }) => {
               const globalPercentage = percentage >= 0
@@ -335,14 +371,23 @@ export default function App() {
           if (nextTab === 'test-workbench') setHasVisitedTestbench(true);
           setActiveTab(nextTab);
         }}
+        onOpenModelPresetManager={() => setSettingsOpen(true)}
       />
 
       <div ref={resultsAnchorRef} />
 
       {activeTab === 'online-validation' ? (
         <OnlineValidationWorkbench
+          modelPresets={modelPresets}
+          selectedPresetId={onlineValidationPreset?.id || onlineValidationPresetId}
+          onSelectPreset={(presetId) => {
+            setOnlineValidationPresetId(presetId);
+            savePageModelSelection(MODEL_PAGE_KEYS.ONLINE_VALIDATION, presetId);
+          }}
+          onOpenModelPresetManager={() => setSettingsOpen(true)}
+          presetCapabilityError={onlineValidationCapabilityError}
           canStart={canStart}
-          hasApiKey={Boolean(apiKey)}
+          hasApiKey={Boolean(onlineValidationRuntimeConfig?.apiKey)}
           isRunning={isRunning}
           pdfFiles={pdfFiles}
           requirementsFile={requirementsFile}
@@ -364,7 +409,11 @@ export default function App() {
           onIndicatorTypeToggle={handleIndicatorTypeToggle}
         />
       ) : activeTab === 'data-prep' ? (
-        <DataPreprocessingWorkbench globalSettings={settings} apiKey={apiKey} />
+        <DataPreprocessingWorkbench
+          globalSettings={settings}
+          modelPresets={modelPresets}
+          onOpenModelPresetManager={() => setSettingsOpen(true)}
+        />
       ) : activeTab === 'docs' ? (
         <MethodologyTab />
       ) : null}
@@ -373,10 +422,24 @@ export default function App() {
       {hasVisitedTestbench && (
         <div style={{ display: activeTab === 'test-workbench' ? 'block' : 'none' }}>
           <Suspense fallback={<section className="glass-panel main-panel"><p className="section-caption">正在加载测试集工作台...</p></section>}>
-            <TestWorkbenchTab globalSettings={settings} />
+            <TestWorkbenchTab
+              globalSettings={settings}
+              modelPresets={modelPresets}
+              onOpenModelPresetManager={() => setSettingsOpen(true)}
+            />
           </Suspense>
         </div>
       )}
+
+      <LLMSettingsDrawer
+        opened={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+        presets={modelPresets}
+        onChangePresets={(nextPresets) => {
+          setModelPresets(nextPresets);
+          saveModelPresets(nextPresets);
+        }}
+      />
     </main>
   );
 }

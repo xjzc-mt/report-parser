@@ -11,9 +11,10 @@ import { ResultsPanel } from './ResultsPanel.jsx';
 import {
   BATCH_SIZE_OPTIONS,
   MAX_CONCURRENCY_OPTIONS,
-  MODEL_OPTIONS,
   PROCESSABLE_VALUE_TYPES
 } from '../constants/extraction.js';
+import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
+import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
 
 function formatPdfInfo(file) {
   if (Array.isArray(file)) {
@@ -74,12 +75,17 @@ export function ExtractorTab({
   stats,
   settings,
   onChangeSetting,
-  onIndicatorTypeToggle
+  onIndicatorTypeToggle,
+  modelPresets = [],
+  selectedPresetId = '',
+  onSelectPreset,
+  presetCapabilityError = '',
+  onOpenModelPresetManager
 }) {
   const readinessItems = [
     { label: 'PDF 报告', ready: pdfFiles.length > 0 },
     { label: '需求清单', ready: Boolean(requirementsFile) },
-    { label: '.env API Key', ready: hasApiKey },
+    { label: '模型预设', ready: hasApiKey && !presetCapabilityError },
     { label: '指标类型', ready: settings.indicatorTypes.length > 0 }
   ];
 
@@ -98,18 +104,22 @@ export function ExtractorTab({
           <div className="panel-header">
             <div>
               <h3>提取参数</h3>
-              <p>把常用参数前置，减少来回打开设置面板的次数。</p>
+              <p>模型连接改为统一预设管理，当前页面只选择预设和运行参数。</p>
             </div>
+            {onOpenModelPresetManager ? (
+              <Button variant="default" size="xs" radius="xl" onClick={onOpenModelPresetManager}>
+                管理模型预设
+              </Button>
+            ) : null}
           </div>
           <div className="settings-grid workbench-grid">
             <div className="input-group">
-              <Select
-                label="Model Name"
-                value={settings.modelName}
-                onChange={(value) => value && onChangeSetting('modelName', value)}
-                data={MODEL_OPTIONS}
-                className="mantine-field"
-                comboboxProps={{ withinPortal: false }}
+              <PagePresetSelect
+                label="当前模型预设"
+                presets={modelPresets}
+                value={selectedPresetId}
+                onChange={onSelectPreset}
+                requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.ONLINE_VALIDATION]}
               />
             </div>
 
@@ -149,6 +159,11 @@ export function ExtractorTab({
               </div>
             </div>
           </div>
+          {presetCapabilityError ? (
+            <p className="section-caption" style={{ color: '#fca5a5', marginTop: 10 }}>
+              {presetCapabilityError}
+            </p>
+          ) : null}
         </section>
 
         <section className="panel-block">

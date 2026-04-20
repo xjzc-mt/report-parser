@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@mantine/core';
 import { IconPlayerPlayFilled, IconRefresh, IconSettings, IconSparkles } from '@tabler/icons-react';
 import { DEFAULT_SETTINGS } from '../constants/extraction.js';
+import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
 import { DEFAULT_LLM1_SETTINGS } from '../constants/testBench.js';
 import {
   getPromptIterationDraft,
@@ -17,7 +18,10 @@ import {
   normalizePromptIterationDraft,
   supportsPromptIterationPdfProvider
 } from '../services/promptIterationService.js';
+import { resolvePagePreset, resolveRuntimeLlmConfig } from '../services/modelPresetResolver.js';
+import { loadPageModelSelection, savePageModelSelection } from '../utils/modelPresetStorage.js';
 import { LS_LLM1, mergeLlmSettings } from '../utils/testSetWorkbenchSettings.js';
+import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
 import { PromptIterationConfigPanel } from './promptIteration/PromptIterationConfigPanel.jsx';
 import { PromptIterationFileList } from './promptIteration/PromptIterationFileList.jsx';
 import { PromptIterationResultsPanel } from './promptIteration/PromptIterationResultsPanel.jsx';
@@ -52,8 +56,9 @@ function loadStoredPromptIterationLlmSettings() {
   return mergePromptIterationLlmSettings(null);
 }
 
-export function FullFlowMode({ llmSettings, vm }) {
+export function FullFlowMode({ llmSettings, vm, modelPresets = [] }) {
   const [draft, setDraft] = useState(() => normalizePromptIterationDraft(null));
+  const [selectedPresetId, setSelectedPresetId] = useState(() => loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION));
   const [history, setHistory] = useState([]);
   const [currentRun, setCurrentRun] = useState(null);
   const [activeResultTab, setActiveResultTab] = useState('current');
@@ -61,9 +66,27 @@ export function FullFlowMode({ llmSettings, vm }) {
   const [errorMsg, setErrorMsg] = useState('');
   const [hasHydrated, setHasHydrated] = useState(false);
 
-  const effectiveLlmSettings = useMemo(() => (
-    llmSettings ? mergePromptIterationLlmSettings(llmSettings) : loadStoredPromptIterationLlmSettings()
-  ), [llmSettings, vm]);
+  const selectedPreset = useMemo(
+    () => resolvePagePreset(
+      MODEL_PAGE_KEYS.PROMPT_ITERATION,
+      modelPresets,
+      { [MODEL_PAGE_KEYS.PROMPT_ITERATION]: selectedPresetId }
+    ),
+    [modelPresets, selectedPresetId]
+  );
+  const runtimePresetSettings = useMemo(
+    () => resolveRuntimeLlmConfig(selectedPreset),
+    [selectedPreset]
+  );
+  const effectiveLlmSettings = useMemo(() => {
+    const fallback = llmSettings ? mergePromptIterationLlmSettings(llmSettings) : loadStoredPromptIterationLlmSettings();
+    return runtimePresetSettings
+      ? {
+          ...fallback,
+          ...runtimePresetSettings
+        }
+      : fallback;
+  }, [llmSettings, runtimePresetSettings, vm]);
 
   const persistedDraft = useMemo(
     () => normalizePromptIterationDraft(draft),
@@ -197,7 +220,7 @@ export function FullFlowMode({ llmSettings, vm }) {
 
       {!supportsPdfUpload ? (
         <div className="prompt-iteration-hint-banner warning">
-          当前 Prompt 快速迭代仅支持 Gemini PDF 直传。切换到 Gemini Provider 后才能运行。
+          当前 Prompt 快速迭代要求 PDF 直传能力。请切换到支持该能力的模型预设后再运行。
         </div>
       ) : null}
 
@@ -205,8 +228,21 @@ export function FullFlowMode({ llmSettings, vm }) {
         draft={draft}
         onDraftChange={setDraft}
         llmSettings={effectiveLlmSettings}
+        presetName={selectedPreset?.name}
         supportsPdfUpload={supportsPdfUpload}
       />
+
+      <div className="panel-block" style={{ marginTop: 14 }}>
+        <PagePresetSelect
+          presets={modelPresets}
+          value={selectedPreset?.id || selectedPresetId}
+          onChange={(presetId) => {
+            setSelectedPresetId(presetId);
+            savePageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION, presetId);
+          }}
+          requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.PROMPT_ITERATION]}
+        />
+      </div>
 
       <PromptIterationFileList
         draft={draft}

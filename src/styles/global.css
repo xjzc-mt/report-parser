@@ -166,7 +166,8 @@ button {
   max-width: 24ch;
 }
 
-.topbar-actions {
+.topbar-actions,
+.topbar-right {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1267,15 +1268,17 @@ td {
     min-height: auto;
   }
 
-  .topbar-actions,
-  .results-actions {
-    justify-content: flex-start;
-  }
+.topbar-actions,
+.topbar-right,
+.results-actions {
+  justify-content: flex-start;
+}
 
-  .topbar-actions {
-    margin-left: 0;
-    padding: 12px 0 0;
-  }
+.topbar-actions,
+.topbar-right {
+  margin-left: 0;
+  padding: 12px 0 0;
+}
 
   .app-summary,
   .summary-strip,
@@ -1431,6 +1434,98 @@ td {
   color: var(--text-primary);
   font-size: 0.88rem;
   word-break: break-word;
+}
+
+.page-preset-select {
+  display: grid;
+  gap: 10px;
+}
+
+.page-preset-select-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.page-preset-select-summary strong {
+  font-size: 0.92rem;
+  color: var(--text-primary);
+}
+
+.preset-manager-layout {
+  display: grid;
+  grid-template-columns: minmax(240px, 280px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.preset-manager-list,
+.preset-manager-editor {
+  padding: 16px;
+  border-radius: 18px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0.015)),
+    rgba(7, 16, 30, 0.44);
+}
+
+.preset-manager-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.preset-manager-list-items {
+  display: grid;
+  gap: 10px;
+}
+
+.preset-list-item {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.preset-list-item.active {
+  border-color: rgba(96, 165, 250, 0.42);
+  background: rgba(37, 99, 235, 0.14);
+}
+
+.preset-list-item span {
+  color: var(--text-secondary);
+  font-size: 0.84rem;
+}
+
+.preset-list-item-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.preset-manager-title {
+  margin: 0;
+  font-size: 1.02rem;
+  font-weight: 700;
+}
+
+.preset-env-tip {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255,255,255,0.03);
+}
+
+.preset-capability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .prompt-iteration-upload-zone {

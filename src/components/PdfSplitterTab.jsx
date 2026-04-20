@@ -10,6 +10,10 @@ import {
 import { UploadCard } from './UploadCard.jsx';
 import { ProgressPanel } from './ProgressPanel.jsx';
 import { locatePdfPages, PAGE_NOT_FOUND } from '../services/pdfSplitterService.js';
+import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
+import { resolvePagePreset, resolveRuntimeLlmConfig, getPresetCapabilityError } from '../services/modelPresetResolver.js';
+import { loadPageModelSelection, savePageModelSelection } from '../utils/modelPresetStorage.js';
+import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
 
 function createInitialProgress() {
   return {
@@ -61,18 +65,45 @@ function getIncompleteItems(items) {
   });
 }
 
-export function PdfSplitterTab({ globalSettings, settings, apiKey }) {
+export function PdfSplitterTab({ globalSettings, settings, modelPresets = [], onOpenModelPresetManager }) {
   const effectiveSettings = globalSettings || settings || {};
+  const [selectedPresetId, setSelectedPresetId] = useState(() => loadPageModelSelection(MODEL_PAGE_KEYS.CHUNKING_TEST));
   const [pdfFiles, setPdfFiles] = useState([]);
   const [items, setItems] = useState([createItem()]);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(createInitialProgress);
   const [result, setResult] = useState(null);
   const resultRef = useRef(null);
+  const selectedPreset = useMemo(
+    () => resolvePagePreset(
+      MODEL_PAGE_KEYS.CHUNKING_TEST,
+      modelPresets,
+      { [MODEL_PAGE_KEYS.CHUNKING_TEST]: selectedPresetId }
+    ),
+    [modelPresets, selectedPresetId]
+  );
+  const runtimeConfig = useMemo(
+    () => resolveRuntimeLlmConfig(selectedPreset),
+    [selectedPreset]
+  );
+  const capabilityError = useMemo(
+    () => getPresetCapabilityError(
+      selectedPreset,
+      PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.CHUNKING_TEST]
+    ),
+    [selectedPreset]
+  );
 
   const filledItems = useMemo(() => getFilledItems(items), [items]);
   const incompleteItems = useMemo(() => getIncompleteItems(items), [items]);
-  const canStart = Boolean(pdfFiles.length > 0 && filledItems.length > 0 && apiKey && !isRunning && incompleteItems.length === 0);
+  const canStart = Boolean(
+    pdfFiles.length > 0 &&
+    filledItems.length > 0 &&
+    runtimeConfig?.apiKey &&
+    !capabilityError &&
+    !isRunning &&
+    incompleteItems.length === 0
+  );
 
   useEffect(() => {
     resultRef.current = result;
@@ -192,7 +223,10 @@ export function PdfSplitterTab({ globalSettings, settings, apiKey }) {
         items: filledItems,
         settings: {
           ...effectiveSettings,
-          apiKey
+          apiKey: runtimeConfig.apiKey,
+          apiUrl: runtimeConfig.apiUrl,
+          modelName: runtimeConfig.modelName,
+          providerType: runtimeConfig.providerType
         },
         onProgress: appendProgress
       });
@@ -230,6 +264,33 @@ export function PdfSplitterTab({ globalSettings, settings, apiKey }) {
       </div>
 
       <div className="splitter-upload-grid">
+        <div className="panel-block" style={{ marginBottom: 14 }}>
+          <div className="panel-header">
+            <div>
+              <h3>模型预设</h3>
+              <p>Chunking 测试统一使用模型预设，不再在页面内直接填写 API 参数。</p>
+            </div>
+            {onOpenModelPresetManager ? (
+              <Button size="xs" radius="xl" variant="default" onClick={onOpenModelPresetManager}>
+                管理模型预设
+              </Button>
+            ) : null}
+          </div>
+          <PagePresetSelect
+            presets={modelPresets}
+            value={selectedPreset?.id || selectedPresetId}
+            onChange={(presetId) => {
+              setSelectedPresetId(presetId);
+              savePageModelSelection(MODEL_PAGE_KEYS.CHUNKING_TEST, presetId);
+            }}
+            requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.CHUNKING_TEST]}
+          />
+          {capabilityError ? (
+            <p className="section-caption" style={{ color: '#fca5a5', marginTop: 10 }}>
+              {capabilityError}
+            </p>
+          ) : null}
+        </div>
         <UploadCard
           icon={<IconFileSearch size={26} stroke={1.8} />}
           tag="PDF"
