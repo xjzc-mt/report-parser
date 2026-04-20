@@ -73,7 +73,12 @@ export function DataPreprocessingWorkbench({ globalSettings, modelPresets, onOpe
         </Suspense>
       )}
 
-      {currentSubtab === 'token-estimation' && <TokenEstimationPage />}
+      {currentSubtab === 'token-estimation' && (
+        <TokenEstimationPage
+          modelPresets={modelPresets}
+          onOpenModelPresetManager={onOpenModelPresetManager}
+        />
+      )}
     </section>
   );
 }

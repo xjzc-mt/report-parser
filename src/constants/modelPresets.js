@@ -20,7 +20,8 @@ export const MODEL_PAGE_KEYS = {
   PROMPT_ITERATION: 'prompt-iteration',
   PROMPT_OPTIMIZATION: 'prompt-optimization',
   ONLINE_VALIDATION: 'online-validation',
-  CHUNKING_TEST: 'chunking-test'
+  CHUNKING_TEST: 'chunking-test',
+  TOKEN_ESTIMATION: 'token-estimation'
 };
 
 export const PAGE_REQUIRED_CAPABILITIES = {

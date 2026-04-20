@@ -413,24 +413,20 @@
 - `llm2Settings`
 - 若干 localStorage key
 
-### 15.2 迁移步骤
+### 15.2 当前清理步骤
 
 首次升级到新系统时：
 
 1. 检查是否已有新预设库
-2. 如果没有，但发现旧 `llm1/llm2` 配置存在
-3. 先把旧配置迁成两个自定义预设，例如：
-   - `迁移-提取模型`
-   - `迁移-优化模型`
-4. 再补 env 默认预设
-5. 为各页面写入初始 `presetId`
-6. 旧 key 保留短暂兼容期，但 UI 不再继续写它们
+2. 清理旧 `intelliextract_llm1 / intelliextract_llm2` localStorage key
+3. 从 `.env` 生成默认模型预设
+4. 为各页面写入初始 `presetId`
 
-### 15.3 兼容期原则
+### 15.3 清理后原则
 
 - 新 UI 只读新预设系统
-- 旧 key 只用于一次性迁移
-- 后续阶段再删除旧字段和旧 localStorage key
+- 旧 `llm1/llm2` key 不再读写
+- 测试集工作台运行时仍可使用 `llm1Settings / llm2Settings` 作为 service 参数名，但它们只表示运行参数，不再表示 localStorage 配置来源
 
 ## 16. 代码边界
 

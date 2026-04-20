@@ -337,6 +337,70 @@ button {
   color: var(--text-secondary);
 }
 
+.token-estimation-page {
+  display: grid;
+  gap: 18px;
+}
+
+.token-estimation-config,
+.token-estimation-inputs,
+.token-estimation-results {
+  display: grid;
+  gap: 16px;
+}
+
+.token-estimation-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.token-estimation-summary > div {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.token-estimation-summary span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+}
+
+.token-estimation-summary strong {
+  font-size: 1.2rem;
+  color: var(--text-primary);
+}
+
+.token-estimation-table {
+  display: grid;
+  overflow: hidden;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.token-estimation-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) 0.5fr 0.55fr 0.55fr;
+  gap: 12px;
+  padding: 12px 14px;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+.token-estimation-row:first-child {
+  border-top: 0;
+}
+
+.token-estimation-row--head {
+  color: var(--text-primary);
+  font-weight: 700;
+  background: rgba(96, 165, 250, 0.08);
+}
+
 .app-summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

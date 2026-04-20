@@ -2,7 +2,7 @@ import { MODEL_PAGE_KEYS, DEFAULT_PRESET_DEFINITIONS } from '../constants/modelP
 import {
   loadAllPageModelSelections,
   loadModelPresets,
-  migrateLegacyLlmSettings,
+  cleanupLegacyLlmSettings,
   saveModelPresets,
   savePageModelSelection
 } from '../utils/modelPresetStorage.js';
@@ -64,9 +64,9 @@ export function initializeModelPresetSystem(env = import.meta.env) {
     };
   }
 
-  const migratedPresets = migrateLegacyLlmSettings();
+  cleanupLegacyLlmSettings();
   const defaultPresets = buildEnvDefaultPresets(env);
-  const presets = mergePresetCollections(migratedPresets, defaultPresets);
+  const presets = mergePresetCollections(defaultPresets);
 
   saveModelPresets(presets);
 

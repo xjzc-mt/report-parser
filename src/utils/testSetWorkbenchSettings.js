@@ -1,7 +1,5 @@
 import { TEST_SET_SUBTABS } from '../constants/labNavigation.js';
 
-export const LS_LLM1 = 'intelliextract_llm1';
-export const LS_LLM2 = 'intelliextract_llm2';
 export const LS_TEST_SET_WORKBENCH_SUBTAB = 'llm_lab_test_set_subtab';
 export const DEFAULT_TEST_SET_WORKBENCH_SUBTAB_KEY = 'prompt-iteration';
 
@@ -12,21 +10,6 @@ const LEGACY_MODE_TO_SUBTAB_KEY = {
 };
 
 const VALID_TEST_SET_SUBTAB_KEYS = new Set(TEST_SET_SUBTABS.map((tab) => tab.key));
-
-export function mergeLlmSettings(saved, defaults) {
-  const merged = { ...(defaults || {}) };
-  if (!saved || typeof saved !== 'object') {
-    return merged;
-  }
-
-  Object.entries(saved).forEach(([key, value]) => {
-    if (value !== undefined) {
-      merged[key] = value;
-    }
-  });
-
-  return merged;
-}
 
 export function mapLegacyTestSetModeToSubtabKey(mode) {
   const normalizedMode = String(mode || '').trim();

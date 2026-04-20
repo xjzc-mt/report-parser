@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActionIcon, Button, NumberInput, Progress, Switch, Tooltip, MultiSelect, Text, Badge } from '@mantine/core';
 import { IconAlertCircle, IconFlask, IconRefresh, IconSettings } from '@tabler/icons-react';
 import { FullFlowMode } from './FullFlowMode.jsx';
@@ -6,15 +6,15 @@ import { QuickValidationMode } from './QuickValidationMode.jsx';
 import { QuickOptimizationMode } from './QuickOptimizationMode.jsx';
 import { DEFAULT_SETTINGS } from '../constants/extraction.js';
 import { DEFAULT_LLM1_SETTINGS, DEFAULT_LLM2_SETTINGS } from '../constants/testBench.js';
+import { MODEL_PAGE_KEYS } from '../constants/modelPresets.js';
 import { TEST_SET_SUBTABS } from '../constants/labNavigation.js';
 import {
   DEFAULT_TEST_SET_WORKBENCH_SUBTAB_KEY,
-  LS_LLM1,
-  LS_LLM2,
   LS_TEST_SET_WORKBENCH_SUBTAB,
-  mergeLlmSettings,
   normalizeTestSetWorkbenchSubtabKey
 } from '../utils/testSetWorkbenchSettings.js';
+import { resolvePagePreset, resolveRuntimeLlmConfig } from '../services/modelPresetResolver.js';
+import { loadPageModelSelection } from '../utils/modelPresetStorage.js';
 import { parseExcel } from '../services/fileParsers.js';
 import {
   runExtractionPhase,
@@ -42,20 +42,6 @@ import {
 } from '../services/persistenceService.js';
 import { estimateCost } from '../services/llmClient.js';
 import { initializeSimilarityAssets } from '../services/synonymService.js';
-
-function loadSettings(key, defaults) {
-  try {
-    const raw = localStorage.getItem(key);
-    if (raw) {
-      return mergeLlmSettings(JSON.parse(raw), defaults);
-    }
-  } catch (_) { /* ignore */ }
-  return mergeLlmSettings(null, defaults);
-}
-
-function saveSettings(key, settings) {
-  try { localStorage.setItem(key, JSON.stringify(settings)); } catch (_) { /* ignore */ }
-}
 
 function createInitialProgress() {
   return { visible: false, status: '', percentage: 0, logs: [], isLoading: false };
@@ -123,31 +109,8 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
     } catch (_) { /* ignore */ }
     return DEFAULT_TEST_SET_WORKBENCH_SUBTAB_KEY;
   });
-  const [llm1Settings, setLlm1Settings] = useState(() => loadSettings(LS_LLM1, {
-    ...DEFAULT_LLM1_SETTINGS,
-    apiUrl: globalSettings.apiUrl,
-    apiKey: ''
-  }));
-  const [llm2Settings, setLlm2Settings] = useState(() => loadSettings(LS_LLM2, {
-    ...DEFAULT_LLM2_SETTINGS,
-    apiUrl: globalSettings.apiUrl,
-    apiKey: ''
-  }));
-
-  const handleChangeLlm1 = useCallback((key, val) => {
-    setLlm1Settings((prev) => {
-      const next = { ...prev, [key]: val };
-      saveSettings(LS_LLM1, next);
-      return next;
-    });
-  }, []);
-  const handleChangeLlm2 = useCallback((key, val) => {
-    setLlm2Settings((prev) => {
-      const next = { ...prev, [key]: val };
-      saveSettings(LS_LLM2, next);
-      return next;
-    });
-  }, []);
+  const [llm1Settings] = useState(() => ({ ...DEFAULT_LLM1_SETTINGS }));
+  const [llm2Settings] = useState(() => ({ ...DEFAULT_LLM2_SETTINGS }));
 
   const [pdfFiles, setPdfFiles] = useState([]);
   const [testSetFile, setTestSetFile] = useState(null);
@@ -330,8 +293,18 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
     } catch (_) { /* ignore */ }
   };
 
-  const apiKey1 = llm1Settings.apiKey || globalSettings.apiKey || import.meta.env.VITE_GEMINI_API_KEY || '';
-  const apiKey2 = llm2Settings.apiKey || globalSettings.apiKey || import.meta.env.VITE_GEMINI_API_KEY || '';
+  const extractionRuntimeConfig = resolveRuntimeLlmConfig(resolvePagePreset(
+    MODEL_PAGE_KEYS.PROMPT_ITERATION,
+    modelPresets,
+    { [MODEL_PAGE_KEYS.PROMPT_ITERATION]: loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION) }
+  ));
+  const optimizationRuntimeConfig = resolveRuntimeLlmConfig(resolvePagePreset(
+    MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION,
+    modelPresets,
+    { [MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION]: loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION) }
+  ));
+  const apiKey1 = extractionRuntimeConfig?.apiKey || '';
+  const apiKey2 = optimizationRuntimeConfig?.apiKey || '';
   const canStartExtraction = Boolean(pdfFiles.length > 0 && testSetFile && apiKey1 && !isRunning);
   const canStartOptimization = Boolean(comparisonRows && apiKey2 && !isRunning);
   const canStandaloneOptimize = Boolean(comparisonFile && apiKey2 && !isRunning);
@@ -410,7 +383,11 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
       const result = await runExtractionPhase({
         pdfFiles,
         testSetFile,
-        llm1Settings: { ...llm1Settings, apiKey: apiKey1 },
+        llm1Settings: {
+          ...llm1Settings,
+          ...extractionRuntimeConfig,
+          apiKey: apiKey1
+        },
         onProgress: (e) => appendExLog({ ...e, percentage: e.percentage ?? -1 }),
         runId: RUN_ID,
         tokenStats: tokenStatsRef.current,
@@ -465,6 +442,7 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
         comparisonRows: rows,
         llm2Settings: {
           ...llm2Settings,
+          ...optimizationRuntimeConfig,
           apiKey: apiKey2,
           maxOptIterations: effectiveMaxIter ?? llm2Settings.maxOptIterations
         },
@@ -571,7 +549,7 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
     onInterrupt: handleInterrupt,
     onDownloadCurrent: handleDownloadCurrent,
     onReset: handleReset,
-    onOpenSettings: () => setSettingsOpen(true),
+    onOpenSettings: onOpenModelPresetManager,
     noApiKey,
     cachedPages,
     onDeleteCachedPage: handleDeleteCachedPage,
@@ -600,7 +578,6 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
     llm1Rows,
     comparisonRows,
     llm2Settings,
-    onChangeLlm2: handleChangeLlm2,
     stage1AnalysisRef,
     selectedCodes,
     onSelectedCodesChange: setSelectedCodes,
@@ -621,8 +598,8 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
     onExportLlm1Results: exportLlm1Results,
     onExportComparisonRows: exportComparisonRows,
     onExportFinalResults: exportFinalResults,
-    llm1ModelName: llm1Settings.modelName,
-    llm2ModelName: llm2Settings.modelName,
+    llm1ModelName: extractionRuntimeConfig?.modelName || llm1Settings.modelName,
+    llm2ModelName: optimizationRuntimeConfig?.modelName || llm2Settings.modelName,
     formatPdfFiles,
     formatExcelFile,
     onResumeRun: handleResumeRun,
@@ -675,7 +652,7 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
       </div>
 
       {currentSubtab === 'prompt-iteration' && (
-        <FullFlowMode llmSettings={llm1Settings} modelPresets={modelPresets} />
+        <FullFlowMode modelPresets={modelPresets} />
       )}
 
       {currentSubtab === 'model-validation' && (
@@ -683,8 +660,6 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
           globalSettings={globalSettings}
           llm1Settings={llm1Settings}
           llm2Settings={llm2Settings}
-          onChangeLlm1={handleChangeLlm1}
-          onChangeLlm2={handleChangeLlm2}
           onSwitchToOptimization={(rows, preselectedCodes) => {
             setComparisonRows(rows);
             setPreselectedOptCodes(preselectedCodes || []);

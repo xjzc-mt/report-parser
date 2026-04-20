@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@mantine/core';
 import { IconPlayerPlayFilled, IconRefresh, IconSettings, IconSparkles } from '@tabler/icons-react';
-import { DEFAULT_SETTINGS } from '../constants/extraction.js';
 import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
 import { DEFAULT_LLM1_SETTINGS } from '../constants/testBench.js';
 import {
@@ -20,7 +19,6 @@ import {
 } from '../services/promptIterationService.js';
 import { resolvePagePreset, resolveRuntimeLlmConfig } from '../services/modelPresetResolver.js';
 import { loadPageModelSelection, savePageModelSelection } from '../utils/modelPresetStorage.js';
-import { LS_LLM1, mergeLlmSettings } from '../utils/testSetWorkbenchSettings.js';
 import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
 import { PromptIterationConfigPanel } from './promptIteration/PromptIterationConfigPanel.jsx';
 import { PromptIterationFileList } from './promptIteration/PromptIterationFileList.jsx';
@@ -30,33 +28,14 @@ function hasAttachedFile(item) {
   return Boolean(item?.file && typeof item.file.arrayBuffer === 'function');
 }
 
-function mergePromptIterationLlmSettings(input) {
-  const merged = mergeLlmSettings(input, {
-    ...DEFAULT_LLM1_SETTINGS,
-    apiUrl: DEFAULT_SETTINGS.apiUrl,
-    apiKey: ''
-  });
-
+function createFallbackPromptIterationSettings() {
   return {
-    ...merged,
-    apiKey: merged.apiKey || import.meta.env.VITE_GEMINI_API_KEY || ''
+    ...DEFAULT_LLM1_SETTINGS,
+    apiKey: import.meta.env.VITE_GEMINI_API_KEY || ''
   };
 }
 
-function loadStoredPromptIterationLlmSettings() {
-  try {
-    const raw = localStorage.getItem(LS_LLM1);
-    if (raw) {
-      return mergePromptIterationLlmSettings(JSON.parse(raw));
-    }
-  } catch (_) {
-    // ignore localStorage parse issues and fall back to defaults
-  }
-
-  return mergePromptIterationLlmSettings(null);
-}
-
-export function FullFlowMode({ llmSettings, vm, modelPresets = [] }) {
+export function FullFlowMode({ vm, modelPresets = [] }) {
   const [draft, setDraft] = useState(() => normalizePromptIterationDraft(null));
   const [selectedPresetId, setSelectedPresetId] = useState(() => loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION));
   const [history, setHistory] = useState([]);
@@ -79,14 +58,14 @@ export function FullFlowMode({ llmSettings, vm, modelPresets = [] }) {
     [selectedPreset]
   );
   const effectiveLlmSettings = useMemo(() => {
-    const fallback = llmSettings ? mergePromptIterationLlmSettings(llmSettings) : loadStoredPromptIterationLlmSettings();
+    const fallback = createFallbackPromptIterationSettings();
     return runtimePresetSettings
       ? {
           ...fallback,
           ...runtimePresetSettings
         }
       : fallback;
-  }, [llmSettings, runtimePresetSettings, vm]);
+  }, [runtimePresetSettings, vm]);
 
   const persistedDraft = useMemo(
     () => normalizePromptIterationDraft(draft),

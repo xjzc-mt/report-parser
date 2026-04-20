@@ -2,10 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  cleanupLegacyLlmSettings,
   loadAllPageModelSelections,
   loadModelPresets,
   loadPageModelSelection,
-  migrateLegacyLlmSettings,
   saveModelPresets,
   savePageModelSelection
 } from '../src/utils/modelPresetStorage.js';
@@ -52,7 +52,7 @@ test('savePageModelSelection/loadPageModelSelection 可按页面独立恢复', (
   });
 });
 
-test('migrateLegacyLlmSettings 会将旧 llm1/llm2 配置迁移为自定义预设', () => {
+test('cleanupLegacyLlmSettings 会删除旧 llm1/llm2 localStorage key', () => {
   localStorage.setItem('intelliextract_llm1', JSON.stringify({
     apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
     apiKey: 'legacy-key-1',
@@ -67,12 +67,8 @@ test('migrateLegacyLlmSettings 会将旧 llm1/llm2 配置迁移为自定义预�
     similarityThreshold: 70
   }));
 
-  const migrated = migrateLegacyLlmSettings();
+  cleanupLegacyLlmSettings();
 
-  assert.equal(migrated.length, 2);
-  assert.equal(migrated[0].credentialMode, 'manual');
-  assert.equal(migrated[0].manualApiKey, 'legacy-key-1');
-  assert.equal(migrated[0].vendorKey, 'gemini');
-  assert.equal(migrated[1].vendorKey, 'openai');
-  assert.equal(migrated[1].transportType, 'openai_compatible');
+  assert.equal(localStorage.getItem('intelliextract_llm1'), null);
+  assert.equal(localStorage.getItem('intelliextract_llm2'), null);
 });

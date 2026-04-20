@@ -3,10 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   DEFAULT_TEST_SET_WORKBENCH_SUBTAB_KEY,
-  LS_LLM1,
-  LS_LLM2,
   LS_TEST_SET_WORKBENCH_SUBTAB,
-  mergeLlmSettings,
   mapLegacyTestSetModeToSubtabKey,
   normalizeTestSetWorkbenchSubtabKey
 } from '../src/utils/testSetWorkbenchSettings.js';
@@ -34,23 +31,6 @@ test('normalizeTestSetWorkbenchSubtabKey 只接受合法子页 key', () => {
     assert.equal(normalizeTestSetWorkbenchSubtabKey(key), key);
   });
   assert.equal(normalizeTestSetWorkbenchSubtabKey('invalid'), 'prompt-iteration');
-});
-
-test('mergeLlmSettings 保留已保存字段并补默认值', () => {
-  const defaults = { apiUrl: 'default-url', apiKey: '', modelName: 'default-model', parallelCount: 5 };
-  const saved = { apiKey: 'saved-key', modelName: 'saved-model' };
-
-  assert.deepEqual(mergeLlmSettings(saved, defaults), {
-    apiUrl: 'default-url',
-    apiKey: 'saved-key',
-    modelName: 'saved-model',
-    parallelCount: 5
-  });
-});
-
-test('LS_LLM1 和 LS_LLM2 暴露持久化 key', () => {
-  assert.equal(LS_LLM1, 'intelliextract_llm1');
-  assert.equal(LS_LLM2, 'intelliextract_llm2');
 });
 
 test('LS_TEST_SET_WORKBENCH_SUBTAB 暴露测试集二级页持久化 key', () => {
