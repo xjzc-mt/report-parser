@@ -24,6 +24,7 @@ export async function startPromptOptimizationRun(input, deps = {}) {
 
   await repo.savePromptAsset?.(input.asset);
   await repo.savePromptOptimizationDataset?.(input.dataset);
+  await repo.savePromptVersion?.(input.baselineVersion);
 
   const result = await engine({
     assetId: input.asset.id,

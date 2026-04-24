@@ -34,6 +34,10 @@ test('startPromptOptimizationRun 会保存 asset、dataset、run 与 trace', asy
       calls.push(['dataset', dataset.id]);
       return dataset;
     },
+    savePromptVersion: async (version) => {
+      calls.push(['version', version.id]);
+      return version;
+    },
     savePromptOptimizationRun: async (run) => {
       calls.push(['run', run.id]);
       return run;
@@ -64,6 +68,7 @@ test('startPromptOptimizationRun 会保存 asset、dataset、run 与 trace', asy
   assert.deepEqual(calls, [
     ['asset', 'asset_1'],
     ['dataset', 'pods_1'],
+    ['version', 'pver_1'],
     ['run', 'run_1'],
     ['trace', 'run_1', 1]
   ]);
