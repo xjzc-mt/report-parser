@@ -2,7 +2,7 @@ import { openDB } from 'idb';
 import { normalizePromptIterationDraft } from './promptIterationService.js';
 
 const DB_NAME = 'intelliextract';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const memoryStores = new Map();
 
 function createMemoryStore(name) {
@@ -71,6 +71,21 @@ function getDb() {
       }
       if (!db.objectStoreNames.contains('phaseResults')) {
         db.createObjectStore('phaseResults', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('promptOptimizationAssets')) {
+        db.createObjectStore('promptOptimizationAssets', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('promptOptimizationDatasets')) {
+        db.createObjectStore('promptOptimizationDatasets', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('promptOptimizationVersions')) {
+        db.createObjectStore('promptOptimizationVersions', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('promptOptimizationRuns')) {
+        db.createObjectStore('promptOptimizationRuns', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('promptOptimizationTraces')) {
+        db.createObjectStore('promptOptimizationTraces', { keyPath: 'id' });
       }
     }
   });
@@ -358,4 +373,65 @@ export async function getPromptIterationHistory() {
   const db = await getDb();
   const entry = await db.get('phaseResults', PROMPT_ITERATION_HISTORY_KEY);
   return entry?.history ?? [];
+}
+
+// ── promptOptimization stores ────────────────────────────────────────────────
+
+export async function savePromptOptimizationAssetEntry(asset) {
+  const db = await getDb();
+  await db.put('promptOptimizationAssets', asset);
+}
+
+export async function savePromptOptimizationDatasetEntry(dataset) {
+  const db = await getDb();
+  await db.put('promptOptimizationDatasets', dataset);
+}
+
+export async function savePromptOptimizationVersionEntry(version) {
+  const db = await getDb();
+  await db.put('promptOptimizationVersions', version);
+}
+
+export async function listPromptOptimizationVersionEntries() {
+  const db = await getDb();
+  return db.getAll('promptOptimizationVersions');
+}
+
+export async function savePromptOptimizationRunEntry(run) {
+  const db = await getDb();
+  await db.put('promptOptimizationRuns', run);
+}
+
+export async function listPromptOptimizationRunEntries() {
+  const db = await getDb();
+  return db.getAll('promptOptimizationRuns');
+}
+
+export async function savePromptOptimizationTraceEntry(runId, entries) {
+  const db = await getDb();
+  const key = `trace_${runId}`;
+  const previous = await db.get('promptOptimizationTraces', key);
+  const nextEntries = [...(previous?.entries || []), ...entries];
+  await db.put('promptOptimizationTraces', {
+    id: key,
+    runId,
+    entries: nextEntries,
+    updatedAt: Date.now()
+  });
+}
+
+export async function getPromptOptimizationTraceEntry(runId) {
+  const db = await getDb();
+  return db.get('promptOptimizationTraces', `trace_${runId}`);
+}
+
+export async function clearPromptOptimizationEntries() {
+  const db = await getDb();
+  await Promise.all([
+    db.clear('promptOptimizationAssets'),
+    db.clear('promptOptimizationDatasets'),
+    db.clear('promptOptimizationVersions'),
+    db.clear('promptOptimizationRuns'),
+    db.clear('promptOptimizationTraces')
+  ]);
 }
