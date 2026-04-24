@@ -82,6 +82,7 @@ export function createOptimizationRun(raw = {}, deps = {}) {
     datasetId: normalizeString(raw.datasetId),
     status: normalizeString(raw.status) || 'draft',
     baselineScore: Number(raw.baselineScore || 0),
+    baselinePromptText: normalizeString(raw.baselinePromptText),
     bestCandidateId: normalizeString(raw.bestCandidateId),
     appliedVersionId: normalizeString(raw.appliedVersionId),
     candidates: Array.isArray(raw.candidates) ? raw.candidates : [],
