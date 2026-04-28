@@ -114,17 +114,23 @@ npm install
 cp .env.example .env
 ```
 
-填入你的 Gemini API Key：
+推荐直接在 `.env` 里维护整个平台默认模型：
 
 ```env
-VITE_GEMINI_API_KEY=your_gemini_api_key_here
+VITE_PLATFORM_DEFAULT_PRESET_NAME=平台默认模型
+VITE_PLATFORM_DEFAULT_VENDOR=gemini
+VITE_PLATFORM_DEFAULT_TRANSPORT=gemini_native
+VITE_PLATFORM_DEFAULT_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+VITE_PLATFORM_DEFAULT_MODEL=gemini-2.5-pro
+VITE_PLATFORM_DEFAULT_API_KEY=your_api_key_here
 ```
 
 说明：
 
 - `.env` 不会提交到 Git
 - 修改环境变量后需要重启 `npm run dev`
-- 测试集工作台也会复用该 Key，除非你在页面设置中单独填写
+- 页面没有单独选择模型时，会跟随这里的全局默认模型
+- 旧版 `VITE_GEMINI_API_KEY` 仍兼容，但更推荐使用新的平台默认配置
 
 ## 4. 启动开发环境
 
@@ -309,7 +315,8 @@ npm install
 优先检查：
 
 - `.env` 是否存在
-- `VITE_GEMINI_API_KEY` 是否正确
+- `VITE_PLATFORM_DEFAULT_API_KEY` 是否正确
+- `VITE_PLATFORM_DEFAULT_MODEL` / `VITE_PLATFORM_DEFAULT_BASE_URL` 是否和厂商匹配
 - 修改 `.env` 后是否重启了 `npm run dev`
 
 ### PDF 上传被拒绝

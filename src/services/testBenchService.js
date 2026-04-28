@@ -11,6 +11,7 @@ import { PROMPT_OPTIMIZER_SYSTEM_PROMPT, VALUE_TYPE_EN_TO_ZH } from '../constant
 import { parsePdfNumbers, extractPdfPages, uint8ArrayToBase64 } from './pdfPageExtractor.js';
 import { NOT_FOUND_VALUE } from '../constants/extraction.js';
 import { areNumericValuesEquivalentWithUnits, calculateFieldSimilarity } from './synonymService.js';
+import { resolveSettingsWithPlatformDefaults } from '../utils/platformDefaultModel.js';
 import {
   appendResults,
   getAllResults,
@@ -221,7 +222,7 @@ function buildMatchedComparisonRow(testRow, llmRow, matchCount = 1) {
 // ── 内部辅助函数 ─────────────────────────────────────────────────────────────
 
 function resolveApiKey(settings) {
-  return settings.apiKey || import.meta.env.VITE_GEMINI_API_KEY || '';
+  return resolveSettingsWithPlatformDefaults(settings).apiKey;
 }
 
 function getValueTypeZh(row) {
@@ -229,6 +230,90 @@ function getValueTypeZh(row) {
   if (zh) return normalizeValueType(zh);
   const en = String(row.value_type || '').trim().toUpperCase();
   return normalizeValueType(VALUE_TYPE_EN_TO_ZH[en] || '文字型');
+}
+
+const REPORT_IDENTITY_FIELD_SET = new Set(['report_name', 'source_announce_id', 'announcement_id']);
+
+function hasAnyMappedValue(row, mappings, side) {
+  return mappings.some((item) => {
+    const key = side === 'llm' ? item.llmField : item.testField;
+    return String(row?.[key] || '').trim() !== '';
+  });
+}
+
+function getReportIdentityMappings(effectiveMappings = []) {
+  return effectiveMappings.filter((item) => (
+    REPORT_IDENTITY_FIELD_SET.has(String(item?.llmField || '').trim())
+    || REPORT_IDENTITY_FIELD_SET.has(String(item?.testField || '').trim())
+  ));
+}
+
+function buildReportMetadataLookup(testSetRows, effectiveMappings) {
+  const reportMappings = getReportIdentityMappings(effectiveMappings);
+  if (reportMappings.length === 0) {
+    return null;
+  }
+
+  const reportMetadataMap = new Map();
+  for (const row of testSetRows) {
+    if (!hasAnyMappedValue(row, reportMappings, 'test')) {
+      continue;
+    }
+
+    const key = buildRowJoinKey(row, reportMappings, 'test');
+    if (!reportMetadataMap.has(key)) {
+      reportMetadataMap.set(key, {
+        source_announce_id: String(row.source_announce_id || row.announcement_id || '').trim(),
+        report_name: String(row.report_name || '').trim(),
+        report_type: String(row.report_type || '').trim()
+      });
+    }
+  }
+
+  return {
+    reportMappings,
+    reportMetadataMap
+  };
+}
+
+function resolveReportMetadataForHallucination(llmRow, lookup) {
+  if (!lookup || !hasAnyMappedValue(llmRow, lookup.reportMappings, 'llm')) {
+    return null;
+  }
+
+  const key = buildRowJoinKey(llmRow, lookup.reportMappings, 'llm');
+  return lookup.reportMetadataMap.get(key) || null;
+}
+
+function normalizeHallucinationValueType(llmRow) {
+  const rawValueType = String(llmRow?.value_type || '').trim();
+  const upper = rawValueType.toUpperCase();
+
+  if (rawValueType.includes('强度') || upper.includes('INTENSITY')) {
+    return 'INTENSITY';
+  }
+  if (
+    rawValueType.includes('货币')
+    || rawValueType.includes('数值')
+    || rawValueType.includes('数字')
+    || upper.includes('NUMERIC')
+    || upper.includes('CURRENCY')
+  ) {
+    return 'NUMERIC';
+  }
+  if (rawValueType.includes('文字') || rawValueType.includes('文本') || upper.includes('TEXT')) {
+    return 'TEXT';
+  }
+
+  const hasNumericValue = String(llmRow?.num_value || '').trim() !== '' && String(llmRow?.num_value || '').trim() !== NOT_FOUND_VALUE;
+  if (hasNumericValue) {
+    if (String(llmRow?.numerator_unit || '').trim() || String(llmRow?.denominator_unit || '').trim()) {
+      return 'INTENSITY';
+    }
+    return 'NUMERIC';
+  }
+
+  return 'TEXT';
 }
 
 /** 按 report_name + pdf_numbers 分组 */
@@ -335,6 +420,75 @@ async function getPdfInputForLlm(pdfData, isGemini) {
   return { pdfBase64: null, pdfText };
 }
 
+function uniqueSortedPages(pages = []) {
+  return [...new Set((Array.isArray(pages) ? pages : []).filter((page) => Number.isFinite(page) && page >= 1))]
+    .sort((left, right) => left - right);
+}
+
+function expandPages(pages = [], radius = 1) {
+  const expanded = [];
+  uniqueSortedPages(pages).forEach((page) => {
+    for (let current = page - radius; current <= page + radius; current += 1) {
+      if (current >= 1) {
+        expanded.push(current);
+      }
+    }
+  });
+  return uniqueSortedPages(expanded);
+}
+
+export function buildOptimizationPageContext(row, { windowRadius = 1 } = {}) {
+  const goldPages = uniqueSortedPages(parsePdfNumbers(String(row?.pdf_numbers || '')));
+  const llmPages = uniqueSortedPages(parsePdfNumbers(String(row?.llm_pdf_numbers || '')));
+  const diagnosticPages = uniqueSortedPages([
+    ...expandPages(goldPages, windowRadius),
+    ...expandPages(llmPages, windowRadius)
+  ]);
+
+  return {
+    goldPages,
+    llmPages,
+    diagnosticPages
+  };
+}
+
+function shuffleRows(rows = [], random = Math.random) {
+  const items = [...rows];
+  for (let index = items.length - 1; index > 0; index -= 1) {
+    const nextIndex = Math.floor(random() * (index + 1));
+    [items[index], items[nextIndex]] = [items[nextIndex], items[index]];
+  }
+  return items;
+}
+
+export function selectOptimizationTrainingAndValidationRows(
+  rows = [],
+  { trainingLimit = 5, validationLimit = 3, random = Math.random } = {}
+) {
+  const rankedRows = [...rows].sort((left, right) => (left?.similarity ?? 0) - (right?.similarity ?? 0));
+  const trainingRows = rankedRows.slice(0, trainingLimit);
+  const trainingReports = new Set(
+    trainingRows
+      .map((item) => String(item?.report_name || '').trim())
+      .filter(Boolean)
+  );
+
+  const holdoutRows = rows.filter((item) => !trainingReports.has(String(item?.report_name || '').trim()));
+  const usesHoldoutReports = holdoutRows.length > 0;
+  const validationPool = holdoutRows.length > 0
+    ? holdoutRows
+    : rows.filter((item) => !trainingRows.includes(item));
+
+  const fallbackPool = validationPool.length > 0 ? validationPool : rows;
+  const validationRows = shuffleRows(fallbackPool, random).slice(0, validationLimit);
+
+  return {
+    trainingRows,
+    validationRows,
+    usesHoldoutReports
+  };
+}
+
 /**
  * 将 LLM 返回的相对页码还原为原始页码（数组索引映射）
  * @param {string} relPageStr - LLM 返回的页码字符串（如 "1", "1,2", NOT_FOUND_VALUE）
@@ -360,6 +514,7 @@ function remapPageNumbers(relPageStr, pageNumbers) {
  */
 function joinTestSetWithLlm1(testSetRows, llm1Results, fieldMappings = null) {
   const effectiveMappings = resolveValidationFieldMappings(fieldMappings);
+  const reportMetadataLookup = buildReportMetadataLookup(testSetRows, effectiveMappings);
   const llm1Map = new Map();
   for (const result of llm1Results) {
     const key = buildRowJoinKey(result, effectiveMappings, 'llm');
@@ -418,41 +573,16 @@ function joinTestSetWithLlm1(testSetRows, llm1Results, fieldMappings = null) {
     if (!hasVal) continue;
 
     hallucinationCount++;
-
-    // 转换英文类型到中文
-    const typeMap = {
-      'TEXT': '文字型',
-      'NUMERIC': '数值型',
-      'INTENSITY': '强度型',
-      'CURRENCY': '数值型'  // 货币型转换为数值型
-    };
-
-    // 优先使用文件中的 value_type，否则推断
-    let valueType = llmRow.value_type || '';
-    if (valueType) {
-      const upper = valueType.toUpperCase();
-      valueType = typeMap[upper] || valueType;
-      // 货币型也转换为数值型
-      if (valueType === '货币型') valueType = '数值型';
-    } else {
-      if (llmRow.num_value && String(llmRow.num_value).trim() && String(llmRow.num_value).trim() !== NOT_FOUND_VALUE) {
-        if (llmRow.currency && String(llmRow.currency).trim()) {
-          valueType = '货币型';
-        } else if (llmRow.numerator_unit || llmRow.denominator_unit) {
-          valueType = '强度型';
-        } else {
-          valueType = '数值型';
-        }
-      } else {
-        valueType = '文字型';
-      }
-    }
+    const valueType = normalizeHallucinationValueType(llmRow);
+    const reportMetadata = resolveReportMetadataForHallucination(llmRow, reportMetadataLookup);
 
     comparisonRows.push({
+      source_announce_id: reportMetadata?.source_announce_id || String(llmRow.source_announce_id || llmRow.announcement_id || '').trim(),
       // 从 LLM 结果填充基本字段
-      report_name: llmRow.report_name,
+      report_name: reportMetadata?.report_name || String(llmRow.report_name || '').trim(),
+      report_type: reportMetadata?.report_type || String(llmRow.report_type || '').trim(),
       indicator_code: String(llmRow.indicator_code || '').trim(),
-      indicator_name: llmRow.indicator_name || String(llmRow.indicator_code || '').trim() || '未知指标',
+      indicator_name: String(llmRow.indicator_name || '').trim(),
       data_year: llmRow.year || '',
       value_type: valueType,
       value_type_1: valueType,
@@ -754,14 +884,15 @@ export async function runExtractionPhase({
 
 // ── 阶段二：LLM 2 Prompt 优化（跨报告按指标分组） ─────────────────────────────
 
-function buildCrossReportOptimizationPrompt(indicatorCode, indicatorName, currentPrompt, reportExamples, indicatorDefinition = null) {
+export function buildCrossReportOptimizationPrompt(indicatorCode, indicatorName, currentPrompt, reportExamples, indicatorDefinition = null) {
   // 按相似度升序排列（低相似度优先，LLM 重点关注失败案例）
   const sorted = [...reportExamples].sort((a, b) => (a.similarity ?? 50) - (b.similarity ?? 50));
 
   const examplesText = sorted
     .map((ex, i) => {
-      // 动态上下文字符数：相似度越低分配越多字符
-      const ctxLimit = (ex.similarity ?? 50) < 50 ? 2500 : (ex.similarity ?? 50) < 70 ? 1500 : 600;
+      const goldCtxLimit = (ex.similarity ?? 50) < 50 ? 1200 : (ex.similarity ?? 50) < 70 ? 900 : 500;
+      const llmCtxLimit = (ex.similarity ?? 50) < 50 ? 1200 : (ex.similarity ?? 50) < 70 ? 900 : 500;
+      const diagnosticCtxLimit = (ex.similarity ?? 50) < 50 ? 800 : 500;
 
       // 预判错误类型（辅助 LLM 诊断）
       const isNotFound = !ex.llm_result || ex.llm_result === '未提取' || ex.llm_result === NOT_FOUND_VALUE;
@@ -774,14 +905,23 @@ function buildCrossReportOptimizationPrompt(indicatorCode, indicatorName, curren
         : (ex.similarity ?? 0) >= 70 ? '【TYPE_F：提取正确】'
         : '';
 
-      const context = ex.contextText
-        ? `\n  页面原文（截取${ctxLimit}字）：\n${ex.contextText.slice(0, ctxLimit)}`
+      const goldContext = ex.goldContextText
+        ? `\n  测试集切片原文（截取${goldCtxLimit}字）：\n${ex.goldContextText.slice(0, goldCtxLimit)}`
         : '';
+      const llmContext = ex.llmContextText
+        ? `\n  初版LLM切片原文（截取${llmCtxLimit}字）：\n${ex.llmContextText.slice(0, llmCtxLimit)}`
+        : '';
+      const diagnosticContext = ex.diagnosticContextText
+        ? `\n  诊断组合切片原文（截取${diagnosticCtxLimit}字）：\n${ex.diagnosticContextText.slice(0, diagnosticCtxLimit)}`
+        : '';
+
       return `### 案例${i + 1}：${ex.report_name} ${hint}
-  页码：${ex.pdf_numbers}
+  测试集页码：${ex.gold_pdf_numbers || ex.pdf_numbers || '未提供'}
+  初版LLM命中页码：${ex.llm_pdf_numbers || '未提供'}
+  诊断组合页码：${ex.diagnostic_pdf_numbers || '未提供'}
   标准答案：${ex.test_answer || '（无/未披露）'}
   LLM提取结果：${ex.llm_result || '未提取'}
-  相似度：${ex.similarity ?? '-'}%${context}`;
+  相似度：${ex.similarity ?? '-'}%${goldContext}${llmContext}${diagnosticContext}`;
     })
     .join('\n\n');
 
@@ -844,11 +984,14 @@ export async function runOptimizationPhase({
   log(`按指标分组（跨报告），共 ${totalGroups} 个不同指标`, 0);
 
   const resultRows = comparisonRows.map((r) => ({ ...r }));
-  const isGemini2 = llm2Settings.providerType === 'gemini' || (!llm2Settings.providerType && (llm2Settings.apiUrl || '').includes('googleapis.com'));
-  const maxRetries = llm2Settings.maxRetries || 3;
-  const maxOptIterations = llm2Settings.maxOptIterations || 1;
-  const similarityThreshold = llm2Settings.similarityThreshold ?? 70;
-  const parallelCount = llm2Settings.parallelCount || 1;
+  const optimizationSettings = resolveSettingsWithPlatformDefaults(llm2Settings);
+  const isGemini2 = optimizationSettings.providerType === 'gemini'
+    || (!optimizationSettings.providerType && (optimizationSettings.apiUrl || '').includes('googleapis.com'));
+  const maxRetries = optimizationSettings.maxRetries || 3;
+  const maxOptIterations = optimizationSettings.maxOptIterations || 1;
+  const similarityThreshold = optimizationSettings.similarityThreshold ?? 70;
+  const parallelCount = optimizationSettings.parallelCount || 1;
+  const contextCache = new Map();
 
   // 关键：详细记录每一轮的优化轨迹
   const iterationDetails = [];
@@ -894,29 +1037,63 @@ export async function runOptimizationPhase({
         optLog(`[${group.indicator_code}] 第 ${iter}/${maxOptIterations} 轮优化开始...`);
 
         // 1. 准备上下文（基于表现最差的 5 个案例）
-        const worstCases = [...group.rows]
-          .sort((a, b) => (a.similarity ?? 0) - (b.similarity ?? 0))
-          .slice(0, 5);
+        const {
+          trainingRows: worstCases,
+          validationRows: verifySamples,
+          usesHoldoutReports
+        } = selectOptimizationTrainingAndValidationRows(group.rows);
+
+        if (usesHoldoutReports) {
+          optLog(`  🧪 验证集优先使用未参与优化的独立报告（${verifySamples.length} 条）`);
+        } else {
+          optLog('  🧪 当前报告数不足，验证集回退到同指标样本');
+        }
         
         const reportExamples = [];
         for (const row of worstCases) {
-          let contextText = '';
           const pdfFile = findPdfFile(pdfFiles, row.report_name);
-          if (pdfFile) {
-            const pageNumbers = parsePdfNumbers(String(row.pdf_numbers || ''));
+          const pageContext = buildOptimizationPageContext(row);
+          const readContext = async (pageNumbers) => {
+            if (!pdfFile || pageNumbers.length === 0) {
+              return '';
+            }
+
+            const cacheKey = `${row.report_name}|||${pageNumbers.join(',')}`;
+            if (contextCache.has(cacheKey)) {
+              return contextCache.get(cacheKey);
+            }
+
             try {
               const { pdfData } = await extractPdfPages(pdfFile, pageNumbers, row.report_name);
               const { pdfText } = await getPdfInputForLlm(pdfData, false);
-              contextText = pdfText;
-            } catch (_) {}
-          }
+              contextCache.set(cacheKey, pdfText || '');
+              return pdfText || '';
+            } catch (_) {
+              contextCache.set(cacheKey, '');
+              return '';
+            }
+          };
+
+          const goldContextText = await readContext(pageContext.goldPages);
+          const llmContextText = await readContext(pageContext.llmPages);
+          const diagnosticContextText = await readContext(pageContext.diagnosticPages);
+
+          const formatPages = (pages, fallback) => (
+            pages.length > 0 ? pages.join(',') : String(fallback || '').trim()
+          );
+
           reportExamples.push({
             report_name: row.report_name,
             pdf_numbers: row.pdf_numbers,
+            gold_pdf_numbers: formatPages(pageContext.goldPages, row.pdf_numbers),
+            llm_pdf_numbers: formatPages(pageContext.llmPages, row.llm_pdf_numbers),
+            diagnostic_pdf_numbers: formatPages(pageContext.diagnosticPages, row.pdf_numbers || row.llm_pdf_numbers),
             test_answer: String(row.text_value || row.num_value || '').trim(),
             llm_result: String(row.llm_text_value || row.llm_num_value || '').trim() || '未提取',
             similarity: row.similarity,
-            contextText
+            goldContextText,
+            llmContextText,
+            diagnosticContextText
           });
         }
 
@@ -935,10 +1112,10 @@ export async function runOptimizationPhase({
           const { text, usage } = await callLLMWithRetry({
             sysPrompt: PROMPT_OPTIMIZER_SYSTEM_PROMPT,
             userPrompt,
-            apiUrl: llm2Settings.apiUrl,
-            apiKey: resolveApiKey(llm2Settings),
-            modelName: llm2Settings.modelName,
-            providerType: llm2Settings.providerType
+            apiUrl: optimizationSettings.apiUrl,
+            apiKey: optimizationSettings.apiKey,
+            modelName: optimizationSettings.modelName,
+            providerType: optimizationSettings.providerType
           }, null, maxRetries);
 
           if (tokenStats) {
@@ -956,7 +1133,6 @@ export async function runOptimizationPhase({
 
         // 3. 验证新 Prompt（随机抽 3 个样本重测）
         optLog(`  🔍 正在验证新 Prompt 的表现...`);
-        const verifySamples = [...group.rows].sort(() => 0.5 - Math.random()).slice(0, 3);
         let newTotalSim = 0;
         let vCount = 0;
         const roundResults = [];
@@ -965,7 +1141,9 @@ export async function runOptimizationPhase({
           const pdfFile = findPdfFile(pdfFiles, sample.report_name);
           if (!pdfFile) continue;
           const pageNumbers = parsePdfNumbers(sample.pdf_numbers);
-          const pdfInput = await getPdfInputForLlm(pdfFile, isGemini2, pageNumbers);
+          if (pageNumbers.length === 0) continue;
+          const { pdfData } = await extractPdfPages(pdfFile, pageNumbers, sample.report_name);
+          const pdfInput = await getPdfInputForLlm(pdfData, isGemini2);
           const sysPrompt = buildExtractionSystemPrompt({ isGemini: isGemini2, batchType: getValueTypeZh(sample) });
           const uPrompt = buildTestUserPrompt([{ ...sample, prompt: newPrompt }]);
           const finalUserPrompt = isGemini2 ? uPrompt : `${uPrompt}\n\n文档内容：\n${pdfInput.pdfText}`;
@@ -974,10 +1152,10 @@ export async function runOptimizationPhase({
             const { text: vText, usage: vUsage } = await callLLMWithRetry({
               sysPrompt,
               userPrompt: finalUserPrompt,
-              apiUrl: llm2Settings.apiUrl,
-              apiKey: resolveApiKey(llm2Settings),
-              modelName: llm2Settings.modelName,
-              providerType: llm2Settings.providerType,
+              apiUrl: optimizationSettings.apiUrl,
+              apiKey: optimizationSettings.apiKey,
+              modelName: optimizationSettings.modelName,
+              providerType: optimizationSettings.providerType,
               pdfBase64: pdfInput.pdfBase64
             }, null, maxRetries);
             
@@ -1125,11 +1303,8 @@ function calculateReportStats(comparisonRows, includeHallucination) {
 }
 
 /** 导出关联后的对比文件（阶段一结果，含相似度，供下载 / 独立优化入口使用） */
-export async function exportComparisonRows(comparisonRows) {
-  const XLSX = await import('xlsx');
-  const ts = new Date().toISOString().slice(0, 16).replace('T', '_').replace(':', '');
-
-  const baseFields = (r) => ({
+function buildComparisonBaseFields(r) {
+  return {
     source_announce_id: r.source_announce_id || '',
     report_name: r.report_name || '',
     report_type: r.report_type || '',
@@ -1156,6 +1331,12 @@ export async function exportComparisonRows(comparisonRows) {
     llm_numerator_unit: r.llm_numerator_unit || '',
     llm_denominator_unit: r.llm_denominator_unit || '',
     llm_pdf_numbers: r.llm_pdf_numbers || ''
+  };
+}
+
+export function buildComparisonWorkbookSheets(comparisonRows = []) {
+  const baseFields = (r) => ({
+    ...buildComparisonBaseFields(r)
   });
 
   const testBasedRows = comparisonRows.map((r) => ({
@@ -1175,6 +1356,35 @@ export async function exportComparisonRows(comparisonRows) {
     numerator_unit_similarity: r.numerator_unit_similarity ?? '',
     denominator_unit_similarity: r.denominator_unit_similarity ?? ''
   }));
+
+  return {
+    testBasedRows,
+    llmBasedRows
+  };
+}
+
+export async function createComparisonRowsWorkbookFile(comparisonRows, options = {}) {
+  const XLSX = await import('xlsx');
+  const { fileName = `comparison_${new Date().toISOString().slice(0, 16).replace('T', '_').replace(':', '')}.xlsx` } = options;
+  const { testBasedRows, llmBasedRows } = buildComparisonWorkbookSheets(comparisonRows);
+
+  const wb = XLSX.utils.book_new();
+  const ws1 = XLSX.utils.json_to_sheet(testBasedRows);
+  const ws2 = XLSX.utils.json_to_sheet(llmBasedRows);
+  XLSX.utils.book_append_sheet(wb, ws1, '基于测试集');
+  XLSX.utils.book_append_sheet(wb, ws2, '基于LLM');
+
+  const arrayBuffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+  return new File([arrayBuffer], fileName, {
+    type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    lastModified: options.lastModified || Date.now()
+  });
+}
+
+export async function exportComparisonRows(comparisonRows) {
+  const XLSX = await import('xlsx');
+  const ts = new Date().toISOString().slice(0, 16).replace('T', '_').replace(':', '');
+  const { testBasedRows, llmBasedRows } = buildComparisonWorkbookSheets(comparisonRows);
 
   const wb = XLSX.utils.book_new();
   const ws1 = XLSX.utils.json_to_sheet(testBasedRows);

@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 
 import {
   cleanupLegacyLlmSettings,
+  clearPageModelSelection,
+  loadGlobalDefaultModelSelection,
   loadAllPageModelSelections,
   loadModelPresets,
   loadPageModelSelection,
+  saveGlobalDefaultModelSelection,
   saveModelPresets,
   savePageModelSelection
 } from '../src/utils/modelPresetStorage.js';
@@ -48,6 +51,24 @@ test('savePageModelSelection/loadPageModelSelection 可按页面独立恢复', (
   assert.equal(loadPageModelSelection('online-validation'), 'preset_claude_default');
   assert.deepEqual(loadAllPageModelSelections(), {
     'prompt-iteration': 'preset_gemini_default',
+    'online-validation': 'preset_claude_default'
+  });
+});
+
+test('saveGlobalDefaultModelSelection/loadGlobalDefaultModelSelection 可往返全局默认模型选择', () => {
+  saveGlobalDefaultModelSelection('preset_openai_default');
+
+  assert.equal(loadGlobalDefaultModelSelection(), 'preset_openai_default');
+});
+
+test('clearPageModelSelection 会删除页面级模型覆盖并保留其他页面', () => {
+  savePageModelSelection('prompt-iteration', 'preset_gemini_default');
+  savePageModelSelection('online-validation', 'preset_claude_default');
+
+  clearPageModelSelection('prompt-iteration');
+
+  assert.equal(loadPageModelSelection('prompt-iteration'), '');
+  assert.deepEqual(loadAllPageModelSelections(), {
     'online-validation': 'preset_claude_default'
   });
 });

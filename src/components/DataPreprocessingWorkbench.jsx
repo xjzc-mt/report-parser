@@ -17,7 +17,12 @@ const PdfSplitterTab = lazy(() => import('./PdfSplitterTab.jsx').then((module) =
   default: module.PdfSplitterTab
 })));
 
-export function DataPreprocessingWorkbench({ globalSettings, modelPresets, onOpenModelPresetManager }) {
+export function DataPreprocessingWorkbench({
+  globalSettings,
+  modelPresets,
+  globalDefaultPresetId = '',
+  onOpenModelPresetManager
+}) {
   const [activeSubtab, setActiveSubtab] = useState(() => {
     try {
       return normalizeDataPrepSubtabKey(localStorage.getItem(LS_DATA_PREP_SUBTAB));
@@ -39,7 +44,6 @@ export function DataPreprocessingWorkbench({ globalSettings, modelPresets, onOpe
           <IconFileZip size={20} stroke={1.8} />
           <span>数据预处理工作台</span>
         </h2>
-        <p className="section-caption">在 Chunking测试、PDF压缩和 Token统计之间切换。</p>
       </div>
 
       <div className="workbench-subtab-nav workbench-subtab-nav--dataprep">
@@ -62,6 +66,7 @@ export function DataPreprocessingWorkbench({ globalSettings, modelPresets, onOpe
           <PdfSplitterTab
             globalSettings={globalSettings}
             modelPresets={modelPresets}
+            globalDefaultPresetId={globalDefaultPresetId}
             onOpenModelPresetManager={onOpenModelPresetManager}
           />
         </Suspense>
@@ -76,6 +81,7 @@ export function DataPreprocessingWorkbench({ globalSettings, modelPresets, onOpe
       {currentSubtab === 'token-estimation' && (
         <TokenEstimationPage
           modelPresets={modelPresets}
+          globalDefaultPresetId={globalDefaultPresetId}
           onOpenModelPresetManager={onOpenModelPresetManager}
         />
       )}

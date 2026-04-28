@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ActionIcon, Button, NumberInput, Progress, Switch, Tooltip, MultiSelect, Text, Badge } from '@mantine/core';
-import { IconAlertCircle, IconFlask, IconRefresh, IconSettings } from '@tabler/icons-react';
+import { IconAlertCircle, IconFileText, IconFlask } from '@tabler/icons-react';
 import { FullFlowMode } from './FullFlowMode.jsx';
 import { QuickValidationMode } from './QuickValidationMode.jsx';
 import { QuickOptimizationMode } from './QuickOptimizationMode.jsx';
+import { PromptAssetLibraryDrawer } from './promptAssets/PromptAssetLibraryDrawer.jsx';
 import { DEFAULT_SETTINGS } from '../constants/extraction.js';
 import { DEFAULT_LLM1_SETTINGS, DEFAULT_LLM2_SETTINGS } from '../constants/testBench.js';
 import { MODEL_PAGE_KEYS } from '../constants/modelPresets.js';
@@ -17,6 +18,7 @@ import { resolvePagePreset, resolveRuntimeLlmConfig } from '../services/modelPre
 import { loadPageModelSelection } from '../utils/modelPresetStorage.js';
 import { parseExcel } from '../services/fileParsers.js';
 import {
+  createComparisonRowsWorkbookFile,
   runExtractionPhase,
   runOptimizationPhase,
   exportComparisonRows,
@@ -42,6 +44,7 @@ import {
 } from '../services/persistenceService.js';
 import { estimateCost } from '../services/llmClient.js';
 import { initializeSimilarityAssets } from '../services/synonymService.js';
+import { importPromptAssetFile, listPromptAssetLibraryEntries } from '../services/promptAssetLibraryService.js';
 
 function createInitialProgress() {
   return { visible: false, status: '', percentage: 0, logs: [], isLoading: false };
@@ -101,7 +104,12 @@ function LogPanel({ title, logs, emptyHint = '暂无日志' }) {
 
 const RUN_ID = 'testbench_run';
 
-export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPresets = [], onOpenModelPresetManager }) {
+export function TestSetWorkbench({
+  globalSettings = DEFAULT_SETTINGS,
+  modelPresets = [],
+  globalDefaultPresetId = '',
+  onOpenModelPresetManager
+}) {
   const stage1AnalysisRef = useRef(null);
   const [activeSubtab, setActiveSubtab] = useState(() => {
     try {
@@ -117,6 +125,10 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
   const [comparisonFile, setComparisonFile] = useState(null);
   const [definitionFile, setDefinitionFile] = useState(null);
   const [cachedPages, setCachedPages] = useState([]);
+  const [promptAssetEntries, setPromptAssetEntries] = useState([]);
+  const [promptAssetLibraryOpened, setPromptAssetLibraryOpened] = useState(false);
+  const [promptAssetImporting, setPromptAssetImporting] = useState(false);
+  const [promptAssetImportSummary, setPromptAssetImportSummary] = useState(null);
   const [isRunning, setIsRunning] = useState(false);
   const [isInterrupting, setIsInterrupting] = useState(false);
   const interruptRef = useRef({ interrupted: false });
@@ -131,12 +143,19 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
   const [llm1Rows, setLlm1Rows] = useState(null);
   const [comparisonRows, setComparisonRows] = useState(null);
   const [selectedCodes, setSelectedCodes] = useState([]);
-  const [preselectedOptCodes, setPreselectedOptCodes] = useState([]);
   const [finalRows, setFinalRows] = useState(null);
   const [iterationDetails, setIterationDetails] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [pendingRunState, setPendingRunState] = useState(null);
   const [loopOptEnabled, setLoopOptEnabled] = useState(false);
+  const [promptIterationSeed, setPromptIterationSeed] = useState(null);
+  const [incomingOptimizationContext, setIncomingOptimizationContext] = useState(null);
+
+  const reloadPromptAssets = async () => {
+    try {
+      setPromptAssetEntries(await listPromptAssetLibraryEntries());
+    } catch (_) { /* ignore */ }
+  };
 
   useEffect(() => {
     if (comparisonRows && comparisonRows.length > 0) {
@@ -157,6 +176,8 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
       try {
         await initializeSimilarityAssets(parseExcel);
       } catch (_) { /* ignore */ }
+
+      await reloadPromptAssets();
 
       let sessionId = sessionStorage.getItem('wb_session_id');
       if (!sessionId) {
@@ -223,6 +244,27 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
       } catch (_) { /* ignore */ }
     })();
   }, []);
+
+  const handleImportPromptAssets = async (file) => {
+    if (!file) {
+      return;
+    }
+    if (!/\.(xlsx|xls|csv)$/i.test(file.name)) {
+      window.alert('请上传 Excel 或 CSV 文件');
+      return;
+    }
+
+    setPromptAssetImporting(true);
+    try {
+      const summary = await importPromptAssetFile(file);
+      setPromptAssetImportSummary(summary);
+      await reloadPromptAssets();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error));
+    } finally {
+      setPromptAssetImporting(false);
+    }
+  };
 
   const handlePdfSelect = async (files) => {
     const next = Array.isArray(files) ? files : [files].filter(Boolean);
@@ -296,12 +338,14 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
   const extractionRuntimeConfig = resolveRuntimeLlmConfig(resolvePagePreset(
     MODEL_PAGE_KEYS.PROMPT_ITERATION,
     modelPresets,
-    { [MODEL_PAGE_KEYS.PROMPT_ITERATION]: loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION) }
+    { [MODEL_PAGE_KEYS.PROMPT_ITERATION]: loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION) },
+    globalDefaultPresetId
   ));
   const optimizationRuntimeConfig = resolveRuntimeLlmConfig(resolvePagePreset(
     MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION,
     modelPresets,
-    { [MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION]: loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION) }
+    { [MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION]: loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION) },
+    globalDefaultPresetId
   ));
   const apiKey1 = extractionRuntimeConfig?.apiKey || '';
   const apiKey2 = optimizationRuntimeConfig?.apiKey || '';
@@ -550,6 +594,11 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
     onDownloadCurrent: handleDownloadCurrent,
     onReset: handleReset,
     onOpenSettings: onOpenModelPresetManager,
+    promptAssetEntries,
+    onPromptAssetsChanged: reloadPromptAssets,
+    onOpenPromptAssetLibrary: () => setPromptAssetLibraryOpened(true),
+    incomingPromptIterationSeed: promptIterationSeed,
+    onConsumePromptIterationSeed: () => setPromptIterationSeed(null),
     noApiKey,
     cachedPages,
     onDeleteCachedPage: handleDeleteCachedPage,
@@ -615,17 +664,11 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
               <IconFlask size={20} stroke={1.8} />
               <span>测试集工作台</span>
             </h2>
-            <p className="section-caption">在完整流程、模型结果验收和 Prompt自动优化之间切换。</p>
           </div>
           <div className="testbench-header-actions">
-            <Tooltip label="模型预设管理">
-              <ActionIcon variant="default" size="lg" radius="xl" onClick={onOpenModelPresetManager} disabled={isRunning}>
-                <IconSettings size={16} stroke={1.8} />
-              </ActionIcon>
-            </Tooltip>
-            <Tooltip label="重置运行状态">
-              <ActionIcon variant="default" size="lg" radius="xl" onClick={handleReset} disabled={isRunning}>
-                <IconRefresh size={16} stroke={1.8} />
+            <Tooltip label="Prompt 资产库">
+              <ActionIcon variant="default" size="lg" radius="xl" onClick={() => setPromptAssetLibraryOpened(true)} disabled={isRunning}>
+                <IconFileText size={16} stroke={1.8} />
               </ActionIcon>
             </Tooltip>
           </div>
@@ -652,7 +695,7 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
       </div>
 
       {currentSubtab === 'prompt-iteration' && (
-        <FullFlowMode modelPresets={modelPresets} />
+        <FullFlowMode modelPresets={modelPresets} globalDefaultPresetId={globalDefaultPresetId} vm={vm} />
       )}
 
       {currentSubtab === 'model-validation' && (
@@ -660,10 +703,21 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
           globalSettings={globalSettings}
           llm1Settings={llm1Settings}
           llm2Settings={llm2Settings}
-          onSwitchToOptimization={(rows, preselectedCodes) => {
+          onSwitchToOptimization={async (rows, selectedCodes) => {
+            let comparisonWorkbookFile = null;
+            try {
+              comparisonWorkbookFile = await createComparisonRowsWorkbookFile(rows, {
+                fileName: 'validation_to_optimization.xlsx'
+              });
+            } catch (_) { /* ignore */ }
             setComparisonRows(rows);
-            setPreselectedOptCodes(preselectedCodes || []);
-            setSelectedCodes(preselectedCodes || []);
+            setSelectedCodes(selectedCodes || []);
+            setIncomingOptimizationContext({
+              id: `${Date.now()}_${Math.random()}`,
+              comparisonRows: rows,
+              comparisonFile: comparisonWorkbookFile,
+              selectedCodes: selectedCodes || []
+            });
             setActiveSubtab('prompt-optimization');
           }}
         />
@@ -673,10 +727,29 @@ export function TestSetWorkbench({ globalSettings = DEFAULT_SETTINGS, modelPrese
         <QuickOptimizationMode
           llm2Settings={llm2Settings}
           modelPresets={modelPresets}
+          globalDefaultPresetId={globalDefaultPresetId}
           onOpenModelPresetManager={onOpenModelPresetManager}
-          preselectedCodes={preselectedOptCodes}
+          promptAssetEntries={promptAssetEntries}
+          onOpenPromptAssetLibrary={() => setPromptAssetLibraryOpened(true)}
+          onPromptAssetsChanged={reloadPromptAssets}
+          incomingContext={incomingOptimizationContext}
+          onConsumeIncomingContext={() => setIncomingOptimizationContext(null)}
+          onSendToPromptIteration={(seed) => {
+            setPromptIterationSeed(seed);
+            setActiveSubtab('prompt-iteration');
+          }}
         />
       )}
+
+      <PromptAssetLibraryDrawer
+        opened={promptAssetLibraryOpened}
+        onClose={() => setPromptAssetLibraryOpened(false)}
+        entries={promptAssetEntries}
+        isImporting={promptAssetImporting}
+        importSummary={promptAssetImportSummary}
+        onImportFile={handleImportPromptAssets}
+        onRefresh={reloadPromptAssets}
+      />
     </section>
   );
 }

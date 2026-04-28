@@ -19,15 +19,31 @@ function isAnthropicProvider(providerType, apiUrl) {
   return (apiUrl || '').includes('anthropic.com');
 }
 
-async function callGemini({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64 }) {
+async function callGemini({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64, pdfInputs = null }) {
   let finalUrl = apiUrl;
   if (!finalUrl.endsWith('generateContent')) {
     finalUrl = `${apiUrl.replace(/\/$/, '')}/models/${modelName}:generateContent`;
   }
-  const contents = [{ role: 'user', parts: [{ text: userPrompt }] }];
-  if (pdfBase64) {
-    contents[0].parts.unshift({ inline_data: { mime_type: 'application/pdf', data: pdfBase64 } });
+  const parts = [];
+  const normalizedPdfInputs = Array.isArray(pdfInputs) && pdfInputs.length > 0
+    ? pdfInputs
+    : (pdfBase64 ? [{ mimeType: 'application/pdf', data: pdfBase64, label: '' }] : []);
+
+  for (const input of normalizedPdfInputs) {
+    if (input?.label) {
+      parts.push({ text: String(input.label) });
+    }
+    if (input?.data) {
+      parts.push({
+        inline_data: {
+          mime_type: input.mimeType || 'application/pdf',
+          data: input.data
+        }
+      });
+    }
   }
+  parts.push({ text: userPrompt });
+  const contents = [{ role: 'user', parts }];
   const requestBody = {
     system_instruction: { parts: [{ text: sysPrompt }] },
     contents,
@@ -103,12 +119,12 @@ async function callOpenAI({ sysPrompt, userPrompt, apiUrl, apiKey, modelName }) 
   return { text: data.choices?.[0]?.message?.content || '', usage };
 }
 
-export async function callLLM({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64 = null, providerType = null }) {
+export async function callLLM({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64 = null, pdfInputs = null, providerType = null }) {
   if (isAnthropicProvider(providerType, apiUrl)) {
     return callAnthropic({ sysPrompt, userPrompt, apiKey, modelName });
   }
   if (isGeminiProvider(providerType, apiUrl)) {
-    return callGemini({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64 });
+    return callGemini({ sysPrompt, userPrompt, apiUrl, apiKey, modelName, pdfBase64, pdfInputs });
   }
   return callOpenAI({ sysPrompt, userPrompt, apiUrl, apiKey, modelName });
 }

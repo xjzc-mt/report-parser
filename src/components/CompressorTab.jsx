@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Badge, Button } from '@mantine/core';
+import { Badge, Button, Slider, Switch, Text, Stack, Group, Divider, Paper } from '@mantine/core';
 import { IconDownload, IconFileTypePdf, IconPlayerPlayFilled } from '@tabler/icons-react';
 import { UploadCard } from './UploadCard.jsx';
 import { ProgressPanel } from './ProgressPanel.jsx';
+import { estimateBase64TokensFromBytes } from '../utils/tokenEstimation.js';
 
 function createInitialProgress() {
   return {
@@ -24,6 +25,10 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+function formatCount(value) {
+  return new Intl.NumberFormat('zh-CN').format(Math.max(0, Number(value) || 0));
+}
+
 function formatReduction(ratio) {
   return `${Math.max(0, Math.round((1 - ratio) * 100))}%`;
 }
@@ -38,6 +43,11 @@ function simplifyPhase(phase) {
 
 export function CompressorTab() {
   const [pdfFile, setPdfFile] = useState(null);
+  const [quality, setQuality] = useState(0.6);
+  const [dimension, setDimension] = useState(1200);
+  const [grayscale, setGrayscale] = useState(false);
+  const [smartMode, setSmartMode] = useState(true);
+  const [smartThreshold, setSmartThreshold] = useState(60000);
   const [isRunning, setIsRunning] = useState(false);
   const [progress, setProgress] = useState(createInitialProgress);
   const [result, setResult] = useState(null);
@@ -61,11 +71,18 @@ export function CompressorTab() {
       return null;
     }
 
+    const originalBase64 = estimateBase64TokensFromBytes(result.originalSize);
+    const compressedBase64 = estimateBase64TokensFromBytes(result.compressedSize);
+
     return {
       originalSize: formatBytes(result.originalSize),
       compressedSize: formatBytes(result.compressedSize),
       savedBytes: formatBytes(Math.max(0, result.originalSize - result.compressedSize)),
-      reduction: formatReduction(result.ratio)
+      reduction: formatReduction(result.ratio),
+      originalBase64Characters: formatCount(originalBase64.base64Characters),
+      originalBase64Tokens: formatCount(originalBase64.estimatedTokens),
+      compressedBase64Characters: formatCount(compressedBase64.base64Characters),
+      compressedBase64Tokens: formatCount(compressedBase64.estimatedTokens)
     };
   }, [result]);
 
@@ -113,7 +130,13 @@ export function CompressorTab() {
     try {
       const { compressPdf } = await import('../services/pdfCompressorService.js');
 
-      const compressionResult = await compressPdf(pdfFile, undefined, (fileProgress) => {
+      const compressionResult = await compressPdf(pdfFile, { 
+        imageQuality: quality, 
+        maxImageDimension: dimension, 
+        grayscale, 
+        smartMode, 
+        smartAreaThreshold: smartThreshold 
+      }, (fileProgress) => {
         let localProgress = 10;
 
         if (fileProgress.total > 0) {
@@ -179,7 +202,6 @@ export function CompressorTab() {
           <IconFileTypePdf size={20} stroke={1.8} />
           <span>PDF压缩</span>
         </h2>
-        <p className="section-caption">上传一个 PDF，压缩完成后直接下载。</p>
       </div>
 
       <UploadCard
@@ -195,6 +217,106 @@ export function CompressorTab() {
         formatFileInfo={formatPdfInfo}
       />
 
+      <Paper withBorder radius="md" p="md" mb="xl" className="glass-panel-subtle" style={{ backgroundColor: 'rgba(255, 255, 255, 0.05)' }}>
+        <Stack gap="md">
+          <Text fw={600} size="sm">压缩配置</Text>
+          
+          <div style={{ padding: '0 10px' }}>
+            <Group justify="space-between" mb="xs">
+              <Text size="xs" fw={500}>图像质量: {Math.round(quality * 100)}%</Text>
+              <Text size="xs" c="dimmed">推荐: 60%-80% (多模态AI识别) | &lt; 20% (极致压缩)</Text>
+            </Group>
+            <Slider 
+              value={quality} 
+              onChange={setQuality} 
+              min={0.05} 
+              max={1.0} 
+              step={0.05} 
+              label={(val) => `${Math.round(val * 100)}%`}
+              marks={[
+                { value: 0.1, label: '极致' },
+                { value: 0.6, label: '推荐' },
+                { value: 0.9, label: '高清' }
+              ]}
+            />
+          </div>
+
+          <Divider variant="dashed" my="xs" />
+
+          <div style={{ padding: '0 10px' }}>
+            <Group justify="space-between" mb="xs">
+              <Text size="xs" fw={500}>最大分辨率 (长边像素): {dimension}px</Text>
+              <Text size="xs" c="dimmed">推荐: 1200-1600px (确保小字清晰)</Text>
+            </Group>
+            <Slider 
+              value={dimension} 
+              onChange={setDimension} 
+              min={400} 
+              max={3000} 
+              step={100} 
+              marks={[
+                { value: 800, label: '低' },
+                { value: 1600, label: '中' },
+                { value: 2400, label: '高' }
+              ]}
+            />
+          </div>
+
+          <Divider variant="dashed" my="xs" />
+
+          <Group justify="space-between">
+            <Stack gap={2}>
+              <Text size="xs" fw={500}>智能平衡模式 (Smart Mode)</Text>
+              <Text size="10px" c="dimmed">自动识别并牺牲 Logo/装饰图，保全大图/文字清晰度</Text>
+            </Stack>
+            <Switch 
+              checked={smartMode} 
+              onChange={(event) => setSmartMode(event.currentTarget.checked)} 
+              size="md"
+              color="blue"
+            />
+          </Group>
+
+          {smartMode && (
+            <div style={{ padding: '0 10px', marginTop: '-5px' }}>
+              <Group justify="space-between" mb="xs">
+                <Text size="xs" fw={500}>智能判定阈值: {smartThreshold.toLocaleString()} 像素面积</Text>
+                <Text size="10px" c="dimmed">小于此面积的图将强制以 5% 质量压缩。推荐: 4w - 10w</Text>
+              </Group>
+              <Slider 
+                value={smartThreshold} 
+                onChange={setSmartThreshold} 
+                min={10000} 
+                max={400000} 
+                step={10000} 
+                label={(val) => `${(val/1000).toFixed(0)}k px`}
+                marks={[
+                  { value: 40000, label: '小Logo' },
+                  { value: 100000, label: '标准' },
+                  { value: 250000, label: '大插图' }
+                ]}
+              />
+              <div style={{ height: '15px' }} />
+            </div>
+          )}
+
+          <Divider variant="dashed" my="xs" />
+
+          <Group justify="space-between">
+            <Stack gap={2}>
+              <Text size="xs" fw={500}>开启灰度化 (Grayscale)</Text>
+              <Text size="10px" c="dimmed">移除颜色以显著减少体积，不影响 AI 文字识别</Text>
+            </Stack>
+            <Switch 
+              checked={grayscale} 
+              onChange={(event) => setGrayscale(event.currentTarget.checked)} 
+              size="md"
+              color="teal"
+            />
+          </Group>
+        </Stack>
+      </Paper>
+
       <div className="compressor-simple-action">
         <Button
           size="lg"
@@ -204,7 +326,7 @@ export function CompressorTab() {
           onClick={handleCompress}
           leftSection={<IconPlayerPlayFilled size={16} />}
         >
-          {isRunning ? 'Compressing...' : 'Start Compression'}
+          {isRunning ? '正在压缩...' : '开始压缩'}
         </Button>
       </div>
 
@@ -219,20 +341,36 @@ export function CompressorTab() {
 
           <div className="summary-strip compressor-summary-strip">
             <div className="summary-chip">
-              <strong>Original</strong>
+              <strong>原始大小</strong>
               <span>{summary.originalSize}</span>
             </div>
             <div className="summary-chip">
-              <strong>Compressed</strong>
+              <strong>压缩后</strong>
               <span>{summary.compressedSize}</span>
             </div>
             <div className="summary-chip">
-              <strong>Saved</strong>
+              <strong>节省</strong>
               <span>{summary.savedBytes}</span>
             </div>
             <div className="summary-chip">
-              <strong>Reduction</strong>
+              <strong>压缩率</strong>
               <span>{summary.reduction}</span>
+            </div>
+            <div className="summary-chip">
+              <strong>Base64字符 前</strong>
+              <span>{summary.originalBase64Characters}</span>
+            </div>
+            <div className="summary-chip">
+              <strong>Base64 Token 前</strong>
+              <span>{summary.originalBase64Tokens}</span>
+            </div>
+            <div className="summary-chip">
+              <strong>Base64字符 后</strong>
+              <span>{summary.compressedBase64Characters}</span>
+            </div>
+            <div className="summary-chip">
+              <strong>Base64 Token 后</strong>
+              <span>{summary.compressedBase64Tokens}</span>
             </div>
           </div>
 

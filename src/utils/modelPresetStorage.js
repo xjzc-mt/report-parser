@@ -1,4 +1,5 @@
 import {
+  GLOBAL_MODEL_SELECTION_STORAGE_KEY,
   MODEL_PRESET_STORAGE_KEY,
   PAGE_MODEL_SELECTIONS_STORAGE_KEY
 } from '../constants/modelPresets.js';
@@ -36,6 +37,23 @@ export function loadAllPageModelSelections() {
   return safeJsonParse(storage.getItem(PAGE_MODEL_SELECTIONS_STORAGE_KEY), {});
 }
 
+export function loadGlobalDefaultModelSelection() {
+  const storage = getLocalStorage();
+  if (!storage) return '';
+  return String(storage.getItem(GLOBAL_MODEL_SELECTION_STORAGE_KEY) || '').trim();
+}
+
+export function saveGlobalDefaultModelSelection(presetId) {
+  const storage = getLocalStorage();
+  if (!storage) return;
+  const nextValue = String(presetId || '').trim();
+  if (!nextValue) {
+    storage.removeItem(GLOBAL_MODEL_SELECTION_STORAGE_KEY);
+    return;
+  }
+  storage.setItem(GLOBAL_MODEL_SELECTION_STORAGE_KEY, nextValue);
+}
+
 export function loadPageModelSelection(pageKey) {
   return loadAllPageModelSelections()[pageKey] || '';
 }
@@ -47,6 +65,14 @@ export function savePageModelSelection(pageKey, presetId) {
     ...loadAllPageModelSelections(),
     [pageKey]: presetId
   };
+  storage.setItem(PAGE_MODEL_SELECTIONS_STORAGE_KEY, JSON.stringify(next));
+}
+
+export function clearPageModelSelection(pageKey) {
+  const storage = getLocalStorage();
+  if (!storage || !pageKey) return;
+  const next = { ...loadAllPageModelSelections() };
+  delete next[pageKey];
   storage.setItem(PAGE_MODEL_SELECTIONS_STORAGE_KEY, JSON.stringify(next));
 }
 

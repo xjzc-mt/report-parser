@@ -25,13 +25,24 @@ function getRunLabel(run) {
   return run?.id || '未命名运行';
 }
 
-export function OptimizationHistoryPanel({ runs, onSelectRun }) {
+export function OptimizationHistoryPanel({ runs, onSelectRun, onClearHistory }) {
   if (!runs.length) {
     return <div className="prompt-optimization-empty">还没有历史运行。跑过一次后，这里会保留优化快照。</div>;
   }
 
   return (
     <div className="prompt-optimization-history">
+      <div className="panel-header">
+        <div>
+          <h3>历史运行</h3>
+          <p>这里只加载运行摘要，点击查看时再按需读取完整回放，避免历史积累导致变卡。</p>
+        </div>
+        {onClearHistory ? (
+          <Button variant="default" color="red" onClick={() => onClearHistory?.()}>
+            清空历史
+          </Button>
+        ) : null}
+      </div>
       <Table className="prompt-optimization-history-table">
         <Table.Thead>
           <Table.Tr>

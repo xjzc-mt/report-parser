@@ -1,5 +1,8 @@
+import { resolvePlatformDefaultConnection } from '../utils/platformDefaultModel.js';
+
 export const NOT_FOUND_VALUE = '未披露';
 export const PROCESSABLE_VALUE_TYPES = ['文字型', '数值型', '货币型', '强度型'];
+const platformDefaultConnection = resolvePlatformDefaultConnection();
 
 export const MODEL_OPTIONS = [
   { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro', provider: 'gemini' },
@@ -14,10 +17,10 @@ export const BATCH_SIZE_OPTIONS = [40, 50, 100];
 export const MAX_CONCURRENCY_OPTIONS = [1, 2, 5];
 
 export const DEFAULT_SETTINGS = {
-  apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  apiUrl: platformDefaultConnection.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
   apiKey: '',
-  modelName: 'gemini-2.5-pro',
-  providerType: 'gemini',
+  modelName: platformDefaultConnection.modelName || 'gemini-2.5-pro',
+  providerType: platformDefaultConnection.providerType || 'gemini',
   batchSize: 40,
   maxConcurrency: 2,
   parallelCount: 5,

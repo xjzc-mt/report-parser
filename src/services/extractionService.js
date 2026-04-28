@@ -11,6 +11,7 @@ import {
   normalizeValueType,
   splitRequirementsIntoBatches
 } from '../utils/extraction.js';
+import { resolveSettingsWithPlatformDefaults } from '../utils/platformDefaultModel.js';
 
 function createProgressReporter(onProgress) {
   return (message, percentage = -1) => {
@@ -93,11 +94,12 @@ async function processExtractionBatch({
   }
 }
 
-export function resolveApiKey(settings) {
-  return settings.apiKey?.trim() || import.meta.env.VITE_GEMINI_API_KEY || '';
+export function resolveApiKey(settings, env = import.meta.env) {
+  return resolveSettingsWithPlatformDefaults(settings, env).apiKey;
 }
 
 export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress, onPartialResults }) {
+  const runtimeSettings = resolveSettingsWithPlatformDefaults(settings);
   const reportProgress = createProgressReporter(onProgress);
   const startTime = new Date();
   let totalInputTokens = 0;
@@ -128,7 +130,7 @@ export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress,
     3
   );
 
-  const isGemini = settings.apiUrl.includes('googleapis.com');
+  const isGemini = runtimeSettings.providerType === 'gemini' || runtimeSettings.apiUrl.includes('googleapis.com');
   let pdfBase64 = null;
   let documentText = '';
 
@@ -186,9 +188,9 @@ export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress,
           totalBatches,
           isGemini,
           systemPrompts,
-          apiUrl: settings.apiUrl.trim(),
-          apiKey: resolveApiKey(settings),
-          modelName: settings.modelName.trim(),
+          apiUrl: runtimeSettings.apiUrl.trim(),
+          apiKey: runtimeSettings.apiKey,
+          modelName: runtimeSettings.modelName.trim(),
           pdfBase64,
           docText: documentText,
           reportProgress

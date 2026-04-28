@@ -1,17 +1,21 @@
+import { resolvePlatformDefaultConnection } from '../utils/platformDefaultModel.js';
+
+const platformDefaultConnection = resolvePlatformDefaultConnection();
+
 export const DEFAULT_LLM1_SETTINGS = {
-  apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  apiUrl: platformDefaultConnection.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
   apiKey: '',
-  modelName: 'gemini-2.5-pro',
-  providerType: 'gemini',
+  modelName: platformDefaultConnection.modelName || 'gemini-2.5-pro',
+  providerType: platformDefaultConnection.providerType || 'gemini',
   parallelCount: 5,
   maxRetries: 3
 };
 
 export const DEFAULT_LLM2_SETTINGS = {
-  apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
+  apiUrl: platformDefaultConnection.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
   apiKey: '',
-  modelName: 'gemini-2.5-pro',
-  providerType: 'gemini',
+  modelName: platformDefaultConnection.modelName || 'gemini-2.5-pro',
+  providerType: platformDefaultConnection.providerType || 'gemini',
   parallelCount: 5,
   maxRetries: 3,
   similarityThreshold: 70,

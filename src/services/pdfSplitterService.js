@@ -2,6 +2,7 @@ import JSZip from 'jszip';
 import { PDFDocument } from 'pdf-lib';
 import { fileToBase64, parsePDF } from './fileParsers.js';
 import { callLLMWithRetry, estimateCost } from './llmClient.js';
+import { resolveSettingsWithPlatformDefaults } from '../utils/platformDefaultModel.js';
 
 const PAGE_NOT_FOUND = '未找到';
 
@@ -167,10 +168,11 @@ async function createSplitPdfBytes(sourcePdf, pageNumbers) {
 }
 
 async function locateSinglePdfPages({ pdfFile, items, settings, reportProgress }) {
-  const apiUrl = String(settings?.apiUrl || '').trim();
-  const apiKey = settings?.apiKey?.trim() || import.meta.env.VITE_GEMINI_API_KEY || '';
-  const modelName = String(settings?.modelName || '').trim();
-  const isGemini = apiUrl.includes('googleapis.com');
+  const runtimeSettings = resolveSettingsWithPlatformDefaults(settings);
+  const apiUrl = String(runtimeSettings.apiUrl || '').trim();
+  const apiKey = String(runtimeSettings.apiKey || '').trim();
+  const modelName = String(runtimeSettings.modelName || '').trim();
+  const isGemini = runtimeSettings.providerType === 'gemini' || apiUrl.includes('googleapis.com');
 
   let pdfBase64 = null;
   let documentText = '';
@@ -202,6 +204,7 @@ async function locateSinglePdfPages({ pdfFile, items, settings, reportProgress }
     apiUrl,
     apiKey,
     modelName,
+    providerType: runtimeSettings.providerType,
     pdfBase64
   }, (message) => reportProgress(message, -1));
 

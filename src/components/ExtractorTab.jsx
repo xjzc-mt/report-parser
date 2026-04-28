@@ -14,7 +14,7 @@ import {
   PROCESSABLE_VALUE_TYPES
 } from '../constants/extraction.js';
 import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
-import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
+import { PagePresetQuickSwitch } from './modelPresets/PagePresetQuickSwitch.jsx';
 
 function formatPdfInfo(file) {
   if (Array.isArray(file)) {
@@ -78,55 +78,58 @@ export function ExtractorTab({
   onIndicatorTypeToggle,
   modelPresets = [],
   selectedPresetId = '',
+  usesGlobalDefault = false,
   onSelectPreset,
+  onResetPreset,
   presetCapabilityError = '',
   onOpenModelPresetManager
 }) {
+  const indicatorTypes = Array.isArray(settings?.indicatorTypes) ? settings.indicatorTypes : [];
+  const batchSize = Number(settings?.batchSize || BATCH_SIZE_OPTIONS[0]);
+  const maxConcurrency = Number(settings?.maxConcurrency || MAX_CONCURRENCY_OPTIONS[0]);
   const readinessItems = [
     { label: 'PDF 报告', ready: pdfFiles.length > 0 },
     { label: '需求清单', ready: Boolean(requirementsFile) },
     { label: '模型预设', ready: hasApiKey && !presetCapabilityError },
-    { label: '指标类型', ready: settings.indicatorTypes.length > 0 }
+    { label: '指标类型', ready: indicatorTypes.length > 0 }
   ];
 
   return (
     <>
       <section className="glass-panel main-panel">
         <div className="section-heading workspace-heading">
-          <h2 className="section-title">
-            <IconLayoutDashboard size={20} stroke={1.8} />
-            <span>{title}</span>
-          </h2>
-          <p className="section-caption">{caption}</p>
+          <div>
+            <h2 className="section-title">
+              <IconLayoutDashboard size={20} stroke={1.8} />
+              <span>{title}</span>
+            </h2>
+            <p className="section-caption">{caption}</p>
+          </div>
+          <PagePresetQuickSwitch
+            presets={modelPresets}
+            preset={modelPresets.find((item) => item.id === selectedPresetId) || null}
+            value={selectedPresetId}
+            requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.ONLINE_VALIDATION]}
+            usesGlobalDefault={usesGlobalDefault}
+            onChange={onSelectPreset}
+            onResetToGlobalDefault={onResetPreset}
+            onOpenModelPresetManager={onOpenModelPresetManager}
+            disabled={isRunning}
+          />
         </div>
 
         <section className="panel-block workbench-settings">
           <div className="panel-header">
             <div>
               <h3>提取参数</h3>
-              <p>模型连接改为统一预设管理，当前页面只选择预设和运行参数。</p>
+              <p>模型连接已收束为全局默认 + 页面覆盖，这里只保留运行参数。</p>
             </div>
-            {onOpenModelPresetManager ? (
-              <Button variant="default" size="xs" radius="xl" onClick={onOpenModelPresetManager}>
-                管理模型预设
-              </Button>
-            ) : null}
           </div>
           <div className="settings-grid workbench-grid">
             <div className="input-group">
-              <PagePresetSelect
-                label="当前模型预设"
-                presets={modelPresets}
-                value={selectedPresetId}
-                onChange={onSelectPreset}
-                requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.ONLINE_VALIDATION]}
-              />
-            </div>
-
-            <div className="input-group">
               <Select
                 label="Batch Size"
-                value={String(settings.batchSize)}
+                value={String(batchSize)}
                 onChange={(value) => value && onChangeSetting('batchSize', Number(value))}
                 data={toSelectData(BATCH_SIZE_OPTIONS)}
                 className="mantine-field"
@@ -137,7 +140,7 @@ export function ExtractorTab({
             <div className="input-group">
               <Select
                 label="Max Concurrency"
-                value={String(settings.maxConcurrency)}
+                value={String(maxConcurrency)}
                 onChange={(value) => value && onChangeSetting('maxConcurrency', Number(value))}
                 data={toSelectData(MAX_CONCURRENCY_OPTIONS)}
                 className="mantine-field"
@@ -152,18 +155,13 @@ export function ExtractorTab({
                   <IndicatorTypeCheckbox
                     key={type}
                     type={type}
-                    checked={settings.indicatorTypes.includes(type)}
+                    checked={indicatorTypes.includes(type)}
                     onChange={onIndicatorTypeToggle}
                   />
                 ))}
               </div>
             </div>
           </div>
-          {presetCapabilityError ? (
-            <p className="section-caption" style={{ color: '#fca5a5', marginTop: 10 }}>
-              {presetCapabilityError}
-            </p>
-          ) : null}
         </section>
 
         <section className="panel-block">

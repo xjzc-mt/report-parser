@@ -208,11 +208,17 @@ test('clipPromptIterationHistory 只保留最近 20 条历史', () => {
 test('normalizePromptIterationDraft 用默认值补齐草稿', () => {
   const draft = normalizePromptIterationDraft({
     name: '范围三',
+    promptAssetId: 'asset_1',
+    promptVersionId: 'pver_2',
+    promptIndicatorCode: 'E3',
     files: [{ id: 'a', pageSpec: '1-2' }]
   });
 
   assert.equal(draft.systemPrompt, '');
   assert.equal(draft.userPrompt, '');
+  assert.equal(draft.promptAssetId, 'asset_1');
+  assert.equal(draft.promptVersionId, 'pver_2');
+  assert.equal(draft.promptIndicatorCode, 'E3');
   assert.equal(draft.files[0].pageSpec, '1-2');
   assert.equal(draft.files[0].type, 'application/pdf');
 });

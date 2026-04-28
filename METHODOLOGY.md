@@ -129,7 +129,7 @@ IntelliExtract 是一个基于浏览器的 AI 数据摘录工具，通过上传 
 
 ### 5.3 安全措施
 
-- API Key 存储在 `.env` 文件中（`VITE_GEMINI_API_KEY`）
+- API Key 和平台默认模型存储在 `.env` 文件中（优先使用 `VITE_PLATFORM_DEFAULT_*`）
 - `.env` 被 `.gitignore` 排除，不会进入版本控制
 - API Key 不出现在 URL 参数中，仅通过 HTTP Header 传输
 - 配置面板在 UI 中隐藏
@@ -175,5 +175,8 @@ npm run preview
 
 环境变量配置（`.env` 文件）：
 ```
-VITE_GEMINI_API_KEY=your_api_key_here
+VITE_PLATFORM_DEFAULT_VENDOR=gemini
+VITE_PLATFORM_DEFAULT_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+VITE_PLATFORM_DEFAULT_MODEL=gemini-2.5-pro
+VITE_PLATFORM_DEFAULT_API_KEY=your_api_key_here
 ```

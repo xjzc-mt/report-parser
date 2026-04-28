@@ -12,8 +12,12 @@ import { ProgressPanel } from './ProgressPanel.jsx';
 import { locatePdfPages, PAGE_NOT_FOUND } from '../services/pdfSplitterService.js';
 import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
 import { resolvePagePreset, resolveRuntimeLlmConfig, getPresetCapabilityError } from '../services/modelPresetResolver.js';
-import { loadPageModelSelection, savePageModelSelection } from '../utils/modelPresetStorage.js';
-import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
+import {
+  clearPageModelSelection,
+  loadPageModelSelection,
+  savePageModelSelection
+} from '../utils/modelPresetStorage.js';
+import { PagePresetQuickSwitch } from './modelPresets/PagePresetQuickSwitch.jsx';
 
 function createInitialProgress() {
   return {
@@ -65,7 +69,13 @@ function getIncompleteItems(items) {
   });
 }
 
-export function PdfSplitterTab({ globalSettings, settings, modelPresets = [], onOpenModelPresetManager }) {
+export function PdfSplitterTab({
+  globalSettings,
+  settings,
+  modelPresets = [],
+  globalDefaultPresetId = '',
+  onOpenModelPresetManager
+}) {
   const effectiveSettings = globalSettings || settings || {};
   const [selectedPresetId, setSelectedPresetId] = useState(() => loadPageModelSelection(MODEL_PAGE_KEYS.CHUNKING_TEST));
   const [pdfFiles, setPdfFiles] = useState([]);
@@ -78,9 +88,10 @@ export function PdfSplitterTab({ globalSettings, settings, modelPresets = [], on
     () => resolvePagePreset(
       MODEL_PAGE_KEYS.CHUNKING_TEST,
       modelPresets,
-      { [MODEL_PAGE_KEYS.CHUNKING_TEST]: selectedPresetId }
+      { [MODEL_PAGE_KEYS.CHUNKING_TEST]: selectedPresetId },
+      globalDefaultPresetId
     ),
-    [modelPresets, selectedPresetId]
+    [globalDefaultPresetId, modelPresets, selectedPresetId]
   );
   const runtimeConfig = useMemo(
     () => resolveRuntimeLlmConfig(selectedPreset),
@@ -256,41 +267,32 @@ export function PdfSplitterTab({ globalSettings, settings, modelPresets = [], on
   return (
     <section className="glass-panel main-panel compressor-simple">
       <div className="section-heading workspace-heading">
-        <h2 className="section-title">
-          <IconFileSearch size={20} stroke={1.8} />
-          <span>Chunking测试</span>
-        </h2>
-        <p className="section-caption">上传 PDF 和描述条目，批量定位页面并导出拆分结果。</p>
+        <div>
+          <h2 className="section-title">
+            <IconFileSearch size={20} stroke={1.8} />
+            <span>Chunking测试</span>
+          </h2>
+        </div>
+        <PagePresetQuickSwitch
+          presets={modelPresets}
+          preset={selectedPreset}
+          value={selectedPreset?.id || selectedPresetId}
+          requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.CHUNKING_TEST]}
+          usesGlobalDefault={!selectedPresetId}
+          onChange={(presetId) => {
+            setSelectedPresetId(presetId);
+            savePageModelSelection(MODEL_PAGE_KEYS.CHUNKING_TEST, presetId);
+          }}
+          onResetToGlobalDefault={() => {
+            setSelectedPresetId('');
+            clearPageModelSelection(MODEL_PAGE_KEYS.CHUNKING_TEST);
+          }}
+          onOpenModelPresetManager={onOpenModelPresetManager}
+          disabled={isRunning}
+        />
       </div>
 
       <div className="splitter-upload-grid">
-        <div className="panel-block" style={{ marginBottom: 14 }}>
-          <div className="panel-header">
-            <div>
-              <h3>模型预设</h3>
-              <p>Chunking 测试统一使用模型预设，不再在页面内直接填写 API 参数。</p>
-            </div>
-            {onOpenModelPresetManager ? (
-              <Button size="xs" radius="xl" variant="default" onClick={onOpenModelPresetManager}>
-                管理模型预设
-              </Button>
-            ) : null}
-          </div>
-          <PagePresetSelect
-            presets={modelPresets}
-            value={selectedPreset?.id || selectedPresetId}
-            onChange={(presetId) => {
-              setSelectedPresetId(presetId);
-              savePageModelSelection(MODEL_PAGE_KEYS.CHUNKING_TEST, presetId);
-            }}
-            requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.CHUNKING_TEST]}
-          />
-          {capabilityError ? (
-            <p className="section-caption" style={{ color: '#fca5a5', marginTop: 10 }}>
-              {capabilityError}
-            </p>
-          ) : null}
-        </div>
         <UploadCard
           icon={<IconFileSearch size={26} stroke={1.8} />}
           tag="PDF"

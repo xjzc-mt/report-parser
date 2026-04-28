@@ -13,7 +13,9 @@ import pako from 'pako';
 const DEFAULT_OPTIONS = {
   imageQuality: 0.1,
   maxImageDimension: 800,
-  grayscale: false
+  grayscale: false,
+    smartMode: true,
+    smartAreaThreshold: 60000
 };
 
 function formatBytes(bytes) {
@@ -488,7 +490,23 @@ export async function compressPdf(file, options = {}, onProgress) {
         continue;
       }
 
-      const { jpegBytes, newWidth, newHeight } = recompressToJpeg(canvas, opts);
+      
+      let currentOpts = { ...opts };
+      
+      // 智能模式逻辑：识别并牺牲无关小图
+      if (opts.smartMode) {
+        const area = w * h;
+        const isSmallIcon = area < (opts.smartAreaThreshold || 60000); // 小于 245x245 左右
+        const isVeryThin = (w / h > 5) || (h / w > 5); // 极窄的分割线或装饰条
+        
+        if (isSmallIcon || isVeryThin) {
+          currentOpts.imageQuality = 0.05; // 强制极低质量
+          currentOpts.maxImageDimension = Math.min(w, h, 200); // 缩小尺寸
+        }
+      }
+
+      const { jpegBytes, newWidth, newHeight } = recompressToJpeg(canvas, currentOpts);
+
       if (jpegBytes.length >= origBytes) {
         imagesSkipped += 1;
         continue;

@@ -30,9 +30,12 @@ export async function startPromptOptimizationRun(input, deps = {}) {
     assetId: input.asset.id,
     baselineVersion: input.baselineVersion,
     datasetId: input.dataset.id,
+    targetName: input.dataset.targetName,
     comparisonRows: input.dataset.comparisonRows,
     pdfFiles: input.pdfFiles,
-    llmSettings: input.llmSettings
+    llmSettings: input.llmSettings,
+    strategy: input.strategy,
+    tokenStats: input.tokenStats
   }, deps.engineDeps);
 
   await repo.savePromptOptimizationRun(result.run);
@@ -58,6 +61,17 @@ export async function applyOptimizationCandidate({ asset, run, candidateId }, de
   }, deps);
 
   await repo.savePromptVersion(version);
+  if (typeof repo.savePromptAsset === 'function') {
+    const persistedAsset = typeof repo.getPromptAsset === 'function'
+      ? await repo.getPromptAsset(asset.id)
+      : null;
+    await repo.savePromptAsset({
+      ...(persistedAsset || {}),
+      ...asset,
+      latestVersionId: version.id,
+      updatedAt: deps.now?.() ?? Date.now()
+    });
+  }
 
   const nextRun = {
     ...run,

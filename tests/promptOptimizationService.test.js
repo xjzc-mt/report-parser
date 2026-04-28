@@ -77,7 +77,12 @@ test('startPromptOptimizationRun 会保存 asset、dataset、run 与 trace', asy
 test('applyOptimizationCandidate 会创建新版本并回填 run', async () => {
   const savedVersions = [];
   const savedRuns = [];
+  const savedAssets = [];
   const repository = {
+    savePromptAsset: async (asset) => {
+      savedAssets.push(asset);
+      return asset;
+    },
     savePromptVersion: async (version) => {
       savedVersions.push(version);
       return version;
@@ -103,6 +108,7 @@ test('applyOptimizationCandidate 会创建新版本并回填 run', async () => {
 
   assert.equal(savedVersions[0].id, 'pver_optimized_1');
   assert.equal(savedVersions[0].sourceType, 'optimized');
+  assert.equal(savedAssets[0].latestVersionId, 'pver_optimized_1');
   assert.equal(next.appliedVersionId, 'pver_optimized_1');
   assert.equal(savedRuns[0].bestCandidateId, 'cand_1');
 });

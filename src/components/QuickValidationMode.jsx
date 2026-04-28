@@ -3,6 +3,7 @@ import { Button, Text } from '@mantine/core';
 import { IconTableImport, IconPlayerPlayFilled, IconDownload, IconRefresh } from '@tabler/icons-react';
 import { UploadCard } from './UploadCard.jsx';
 import { UnifiedAnalysisMerged } from './UnifiedAnalysisMerged.jsx';
+import { OptimizationTargetPickerModal } from './promptOptimization/OptimizationTargetPickerModal.jsx';
 import { parseExcel } from '../services/fileParsers.js';
 import {
   parseLlmResultsFile,
@@ -26,6 +27,10 @@ import {
   DEFAULT_VALIDATION_FIELD_MAPPINGS,
   extractFieldOptionsFromRows
 } from '../utils/validationFieldMappings.js';
+import {
+  loadQuickValidationThreshold,
+  saveQuickValidationThreshold
+} from '../utils/quickValidationSettings.js';
 
 const EXCEL_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
 
@@ -70,8 +75,13 @@ export function QuickValidationMode({ onSwitchToOptimization, llm2Settings }) {
   const [llmFieldOptions, setLlmFieldOptions] = useState([]);
   const [testFieldOptions, setTestFieldOptions] = useState([]);
   const [threshold, setThreshold] = useState(
-    () => llm2Settings?.similarityThreshold ?? 70
+    () => loadQuickValidationThreshold() ?? llm2Settings?.similarityThreshold ?? 70
   );
+  const [optimizationPickerContext, setOptimizationPickerContext] = useState(null);
+
+  useEffect(() => {
+    saveQuickValidationThreshold(threshold);
+  }, [threshold]);
 
   const loadLlmFieldOptions = async (file) => {
     const rows = await parseLlmResultsFile(file);
@@ -447,10 +457,29 @@ export function QuickValidationMode({ onSwitchToOptimization, llm2Settings }) {
             comparisonRows={comparisonRows}
             threshold={threshold}
             onThresholdChange={setThreshold}
-            onJumpToOptimization={onSwitchToOptimization}
+            onJumpToOptimization={(rows, suggestedCodes) => {
+              setOptimizationPickerContext({
+                rows,
+                suggestedCodes: Array.isArray(suggestedCodes) ? suggestedCodes : []
+              });
+            }}
           />
         </div>
       )}
+
+      <OptimizationTargetPickerModal
+        opened={Boolean(optimizationPickerContext)}
+        onClose={() => setOptimizationPickerContext(null)}
+        comparisonRows={optimizationPickerContext?.rows || comparisonRows}
+        defaultMinSimilarity={0}
+        defaultMaxSimilarity={threshold}
+        initialSelectedCodes={optimizationPickerContext?.suggestedCodes || []}
+        onConfirm={(selectedCodes) => {
+          const rows = optimizationPickerContext?.rows || comparisonRows;
+          setOptimizationPickerContext(null);
+          onSwitchToOptimization?.(rows, selectedCodes);
+        }}
+      />
     </div>
   );
 }

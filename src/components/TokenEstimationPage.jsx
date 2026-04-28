@@ -4,9 +4,13 @@ import { IconChartHistogram, IconFileAnalytics, IconRefresh } from '@tabler/icon
 import { MODEL_PAGE_KEYS } from '../constants/modelPresets.js';
 import { parseExcel, parsePDF } from '../services/fileParsers.js';
 import { resolvePagePreset, resolveRuntimeLlmConfig } from '../services/modelPresetResolver.js';
-import { loadPageModelSelection, savePageModelSelection } from '../utils/modelPresetStorage.js';
+import {
+  clearPageModelSelection,
+  loadPageModelSelection,
+  savePageModelSelection
+} from '../utils/modelPresetStorage.js';
 import { estimateTokenCost, summarizeTokenEstimationItems } from '../utils/tokenEstimation.js';
-import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
+import { PagePresetQuickSwitch } from './modelPresets/PagePresetQuickSwitch.jsx';
 
 const SUPPORTED_FILE_EXTENSIONS = ['txt', 'md', 'json', 'csv', 'xlsx', 'xls', 'pdf'];
 
@@ -43,7 +47,11 @@ function formatNumber(value) {
   return new Intl.NumberFormat('zh-CN').format(value || 0);
 }
 
-export function TokenEstimationPage({ modelPresets = [], onOpenModelPresetManager }) {
+export function TokenEstimationPage({
+  modelPresets = [],
+  globalDefaultPresetId = '',
+  onOpenModelPresetManager
+}) {
   const [textInput, setTextInput] = useState('');
   const [files, setFiles] = useState([]);
   const [selectedPresetId, setSelectedPresetId] = useState(() => loadPageModelSelection(MODEL_PAGE_KEYS.TOKEN_ESTIMATION));
@@ -55,9 +63,10 @@ export function TokenEstimationPage({ modelPresets = [], onOpenModelPresetManage
     () => resolvePagePreset(
       MODEL_PAGE_KEYS.TOKEN_ESTIMATION,
       modelPresets,
-      { [MODEL_PAGE_KEYS.TOKEN_ESTIMATION]: selectedPresetId }
+      { [MODEL_PAGE_KEYS.TOKEN_ESTIMATION]: selectedPresetId },
+      globalDefaultPresetId
     ),
-    [modelPresets, selectedPresetId]
+    [globalDefaultPresetId, modelPresets, selectedPresetId]
   );
   const runtimeConfig = useMemo(
     () => resolveRuntimeLlmConfig(selectedPreset),
@@ -106,33 +115,28 @@ export function TokenEstimationPage({ modelPresets = [], onOpenModelPresetManage
   return (
     <section className="glass-panel main-panel token-estimation-page">
       <div className="section-heading workspace-heading">
-        <h2 className="section-title">
-          <IconChartHistogram size={20} stroke={1.8} />
-          <span>Token统计</span>
-        </h2>
-        <p className="section-caption">估算文本或文件的输入 token 量，辅助判断上下文长度和输入成本。</p>
-      </div>
-
-      <div className="panel-block token-estimation-config">
-        <div className="panel-header">
-          <div>
-            <h3>统计口径</h3>
-            <p>Token 数为本地粗略估算，不调用模型 API；成本按所选模型预设的模型名估算。</p>
-          </div>
-          {onOpenModelPresetManager ? (
-            <Button size="xs" radius="xl" variant="default" onClick={onOpenModelPresetManager}>
-              管理模型预设
-            </Button>
-          ) : null}
+        <div>
+          <h2 className="section-title">
+            <IconChartHistogram size={20} stroke={1.8} />
+            <span>Token统计</span>
+          </h2>
         </div>
-        <PagePresetSelect
+        <PagePresetQuickSwitch
           presets={modelPresets}
+          preset={selectedPreset}
           value={selectedPreset?.id || selectedPresetId}
+          requiredCapabilities={{}}
+          usesGlobalDefault={!selectedPresetId}
           onChange={(presetId) => {
             setSelectedPresetId(presetId);
             savePageModelSelection(MODEL_PAGE_KEYS.TOKEN_ESTIMATION, presetId);
           }}
-          requiredCapabilities={{}}
+          onResetToGlobalDefault={() => {
+            setSelectedPresetId('');
+            clearPageModelSelection(MODEL_PAGE_KEYS.TOKEN_ESTIMATION);
+          }}
+          onOpenModelPresetManager={onOpenModelPresetManager}
+          disabled={isRunning}
         />
       </div>
 

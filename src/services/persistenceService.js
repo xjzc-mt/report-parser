@@ -2,7 +2,7 @@ import { openDB } from 'idb';
 import { normalizePromptIterationDraft } from './promptIterationService.js';
 
 const DB_NAME = 'intelliextract';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const memoryStores = new Map();
 
 function createMemoryStore(name) {
@@ -83,6 +83,9 @@ function getDb() {
       }
       if (!db.objectStoreNames.contains('promptOptimizationRuns')) {
         db.createObjectStore('promptOptimizationRuns', { keyPath: 'id' });
+      }
+      if (!db.objectStoreNames.contains('promptOptimizationRunSummaries')) {
+        db.createObjectStore('promptOptimizationRunSummaries', { keyPath: 'id' });
       }
       if (!db.objectStoreNames.contains('promptOptimizationTraces')) {
         db.createObjectStore('promptOptimizationTraces', { keyPath: 'id' });
@@ -240,9 +243,23 @@ const PROMPT_ITERATION_DRAFT_KEY = 'prompt_iteration_draft';
 const PROMPT_ITERATION_HISTORY_KEY = 'prompt_iteration_history';
 const PROMPT_ITERATION_FILE_TYPE = 'prompt_iteration_pdf';
 const PROMPT_ITERATION_FILE_PREFIX = 'prompt_iteration__';
+const PROMPT_OPTIMIZATION_WORKSPACE_KEY = 'prompt_optimization_workspace';
+const PROMPT_OPTIMIZATION_STRATEGY_KEY = 'prompt_optimization_strategy';
+const PROMPT_OPTIMIZATION_COMPARISON_FILE_TYPE = 'prompt_optimization_comparison';
+const PROMPT_OPTIMIZATION_COMPARISON_FILE_PREFIX = 'prompt_optimization_comparison__';
+const PROMPT_OPTIMIZATION_PDF_FILE_TYPE = 'prompt_optimization_pdf';
+const PROMPT_OPTIMIZATION_PDF_FILE_PREFIX = 'prompt_optimization_pdf__';
 
 function getPromptIterationFileStorageId(fileId) {
   return `${PROMPT_ITERATION_FILE_PREFIX}${fileId}`;
+}
+
+function getPromptOptimizationComparisonStorageId(fileId) {
+  return `${PROMPT_OPTIMIZATION_COMPARISON_FILE_PREFIX}${fileId}`;
+}
+
+function getPromptOptimizationPdfStorageId(fileId) {
+  return `${PROMPT_OPTIMIZATION_PDF_FILE_PREFIX}${fileId}`;
 }
 
 function hasPersistablePromptIterationFile(item) {
@@ -375,11 +392,165 @@ export async function getPromptIterationHistory() {
   return entry?.history ?? [];
 }
 
+export async function savePromptOptimizationWorkspaceEntry(workspace) {
+  const db = await getDb();
+  await db.put('phaseResults', {
+    id: PROMPT_OPTIMIZATION_WORKSPACE_KEY,
+    workspace,
+    savedAt: Date.now()
+  });
+}
+
+export async function getPromptOptimizationWorkspaceEntry() {
+  const db = await getDb();
+  const entry = await db.get('phaseResults', PROMPT_OPTIMIZATION_WORKSPACE_KEY);
+  return entry?.workspace ?? null;
+}
+
+export async function savePromptOptimizationStrategyEntry(strategy) {
+  const db = await getDb();
+  await db.put('phaseResults', {
+    id: PROMPT_OPTIMIZATION_STRATEGY_KEY,
+    strategy,
+    savedAt: Date.now()
+  });
+}
+
+export async function getPromptOptimizationStrategyEntry() {
+  const db = await getDb();
+  const entry = await db.get('phaseResults', PROMPT_OPTIMIZATION_STRATEGY_KEY);
+  return entry?.strategy ?? null;
+}
+
+export async function savePromptOptimizationWorkspaceFiles({ comparisonFile = null, pdfFiles = [] } = {}) {
+  const normalizedPdfFiles = Array.isArray(pdfFiles) ? pdfFiles : [];
+  const existingComparisonFiles = await listFiles(PROMPT_OPTIMIZATION_COMPARISON_FILE_TYPE);
+  const existingPdfFiles = await listFiles(PROMPT_OPTIMIZATION_PDF_FILE_TYPE);
+  const expectedComparisonIds = comparisonFile?.id ? new Set([getPromptOptimizationComparisonStorageId(comparisonFile.id)]) : new Set();
+  const expectedPdfIds = new Set(
+    normalizedPdfFiles
+      .map((item) => item?.id)
+      .filter(Boolean)
+      .map((id) => getPromptOptimizationPdfStorageId(id))
+  );
+
+  await Promise.all(
+    existingComparisonFiles
+      .filter((item) => !expectedComparisonIds.has(item.id))
+      .map((item) => deleteFile(item.id))
+  );
+  await Promise.all(
+    existingPdfFiles
+      .filter((item) => !expectedPdfIds.has(item.id))
+      .map((item) => deleteFile(item.id))
+  );
+
+  if (comparisonFile?.id && hasPersistablePromptIterationFile(comparisonFile)) {
+    const storageId = getPromptOptimizationComparisonStorageId(comparisonFile.id);
+    const file = comparisonFile.file;
+    const arrayBuffer = await file.arrayBuffer();
+    await saveFile(
+      storageId,
+      file.name,
+      PROMPT_OPTIMIZATION_COMPARISON_FILE_TYPE,
+      arrayBuffer,
+      file.lastModified ?? null
+    );
+  }
+
+  await Promise.all(normalizedPdfFiles.map(async (item) => {
+    if (!item?.id || !hasPersistablePromptIterationFile(item)) {
+      return;
+    }
+
+    const file = item.file;
+    const arrayBuffer = await file.arrayBuffer();
+    await saveFile(
+      getPromptOptimizationPdfStorageId(item.id),
+      file.name,
+      PROMPT_OPTIMIZATION_PDF_FILE_TYPE,
+      arrayBuffer,
+      file.lastModified ?? null
+    );
+  }));
+}
+
+export async function restorePromptOptimizationWorkspaceFiles(rawWorkspace) {
+  const workspace = rawWorkspace && typeof rawWorkspace === 'object' ? rawWorkspace : {};
+  const comparisonMeta = workspace.comparisonFile && typeof workspace.comparisonFile === 'object'
+    ? workspace.comparisonFile
+    : null;
+  const pdfMetas = Array.isArray(workspace.pdfFiles) ? workspace.pdfFiles : [];
+
+  let comparisonFile = comparisonMeta;
+  if (comparisonMeta?.id) {
+    const record = await getFile(getPromptOptimizationComparisonStorageId(comparisonMeta.id));
+    comparisonFile = {
+      ...comparisonMeta,
+      file: record?.data
+        ? new File([record.data], record.name || comparisonMeta.name || 'comparison.xlsx', {
+            type: comparisonMeta.type || record.type || '',
+            lastModified: typeof record.lastModified === 'number' ? record.lastModified : Date.now()
+          })
+        : null
+    };
+  }
+
+  const pdfFiles = await Promise.all(pdfMetas.map(async (item) => {
+    if (!item?.id) {
+      return {
+        ...item,
+        file: null
+      };
+    }
+
+    const record = await getFile(getPromptOptimizationPdfStorageId(item.id));
+    return {
+      ...item,
+      file: record?.data
+        ? new File([record.data], record.name || item.name || 'restored.pdf', {
+            type: item.type || record.type || 'application/pdf',
+            lastModified: typeof record.lastModified === 'number' ? record.lastModified : Date.now()
+          })
+        : null
+    };
+  }));
+
+  return {
+    ...workspace,
+    comparisonFile,
+    pdfFiles
+  };
+}
+
+export async function clearPromptOptimizationWorkspaceState() {
+  const db = await getDb();
+  await db.delete('phaseResults', PROMPT_OPTIMIZATION_WORKSPACE_KEY);
+  await db.delete('phaseResults', PROMPT_OPTIMIZATION_STRATEGY_KEY);
+
+  const comparisonFiles = await listFiles(PROMPT_OPTIMIZATION_COMPARISON_FILE_TYPE);
+  const pdfFiles = await listFiles(PROMPT_OPTIMIZATION_PDF_FILE_TYPE);
+  await Promise.all([
+    ...comparisonFiles.map((item) => deleteFile(item.id)),
+    ...pdfFiles.map((item) => deleteFile(item.id))
+  ]);
+}
+
 // ── promptOptimization stores ────────────────────────────────────────────────
 
 export async function savePromptOptimizationAssetEntry(asset) {
   const db = await getDb();
   await db.put('promptOptimizationAssets', asset);
+}
+
+export async function getPromptOptimizationAssetEntry(id) {
+  const db = await getDb();
+  return db.get('promptOptimizationAssets', id);
+}
+
+export async function listPromptOptimizationAssetEntries() {
+  const db = await getDb();
+  return db.getAll('promptOptimizationAssets');
 }
 
 export async function savePromptOptimizationDatasetEntry(dataset) {
@@ -392,6 +563,16 @@ export async function savePromptOptimizationVersionEntry(version) {
   await db.put('promptOptimizationVersions', version);
 }
 
+export async function getPromptOptimizationVersionEntry(id) {
+  const db = await getDb();
+  return db.get('promptOptimizationVersions', id);
+}
+
+export async function deletePromptOptimizationVersionEntry(id) {
+  const db = await getDb();
+  await db.delete('promptOptimizationVersions', id);
+}
+
 export async function listPromptOptimizationVersionEntries() {
   const db = await getDb();
   return db.getAll('promptOptimizationVersions');
@@ -402,9 +583,34 @@ export async function savePromptOptimizationRunEntry(run) {
   await db.put('promptOptimizationRuns', run);
 }
 
+export async function getPromptOptimizationRunEntry(id) {
+  const db = await getDb();
+  return db.get('promptOptimizationRuns', id);
+}
+
 export async function listPromptOptimizationRunEntries() {
   const db = await getDb();
   return db.getAll('promptOptimizationRuns');
+}
+
+export async function deletePromptOptimizationRunEntry(id) {
+  const db = await getDb();
+  await db.delete('promptOptimizationRuns', id);
+}
+
+export async function savePromptOptimizationRunSummaryEntry(summary) {
+  const db = await getDb();
+  await db.put('promptOptimizationRunSummaries', summary);
+}
+
+export async function listPromptOptimizationRunSummaryEntries() {
+  const db = await getDb();
+  return db.getAll('promptOptimizationRunSummaries');
+}
+
+export async function deletePromptOptimizationRunSummaryEntry(id) {
+  const db = await getDb();
+  await db.delete('promptOptimizationRunSummaries', id);
 }
 
 export async function savePromptOptimizationTraceEntry(runId, entries) {
@@ -425,6 +631,20 @@ export async function getPromptOptimizationTraceEntry(runId) {
   return db.get('promptOptimizationTraces', `trace_${runId}`);
 }
 
+export async function deletePromptOptimizationTraceEntry(runId) {
+  const db = await getDb();
+  await db.delete('promptOptimizationTraces', `trace_${runId}`);
+}
+
+export async function clearPromptOptimizationRunHistoryEntries() {
+  const db = await getDb();
+  await Promise.all([
+    db.clear('promptOptimizationRuns'),
+    db.clear('promptOptimizationRunSummaries'),
+    db.clear('promptOptimizationTraces')
+  ]);
+}
+
 export async function clearPromptOptimizationEntries() {
   const db = await getDb();
   await Promise.all([
@@ -432,6 +652,7 @@ export async function clearPromptOptimizationEntries() {
     db.clear('promptOptimizationDatasets'),
     db.clear('promptOptimizationVersions'),
     db.clear('promptOptimizationRuns'),
+    db.clear('promptOptimizationRunSummaries'),
     db.clear('promptOptimizationTraces')
   ]);
 }

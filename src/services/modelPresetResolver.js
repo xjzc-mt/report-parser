@@ -49,12 +49,19 @@ export function getPresetCapabilityError(preset, requiredCapabilities = {}) {
   return '';
 }
 
-export function resolvePagePreset(pageKey, presets = [], selections = {}) {
+export function resolvePagePreset(pageKey, presets = [], selections = {}, globalDefaultPresetId = '') {
   const selectedPresetId = selections?.[pageKey];
   if (selectedPresetId) {
     const matched = presets.find((item) => item.id === selectedPresetId);
     if (matched) {
       return matched;
+    }
+  }
+
+  if (globalDefaultPresetId) {
+    const globalDefaultPreset = presets.find((item) => item.id === globalDefaultPresetId);
+    if (globalDefaultPreset) {
+      return globalDefaultPreset;
     }
   }
 

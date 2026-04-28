@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button } from '@mantine/core';
-import { IconPlayerPlayFilled, IconRefresh, IconSettings, IconSparkles } from '@tabler/icons-react';
+import { IconPlayerPlayFilled, IconRefresh } from '@tabler/icons-react';
 import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
 import { DEFAULT_LLM1_SETTINGS } from '../constants/testBench.js';
 import {
@@ -11,15 +11,21 @@ import {
   savePromptIterationDraftFiles,
   savePromptIterationHistory
 } from '../services/persistenceService.js';
+import { resolveSettingsWithPlatformDefaults } from '../utils/platformDefaultModel.js';
 import {
   runPromptIteration,
   clipPromptIterationHistory,
   normalizePromptIterationDraft,
   supportsPromptIterationPdfProvider
 } from '../services/promptIterationService.js';
+import { savePromptAssetVersion } from '../services/promptAssetLibraryService.js';
 import { resolvePagePreset, resolveRuntimeLlmConfig } from '../services/modelPresetResolver.js';
-import { loadPageModelSelection, savePageModelSelection } from '../utils/modelPresetStorage.js';
-import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
+import {
+  clearPageModelSelection,
+  loadPageModelSelection,
+  savePageModelSelection
+} from '../utils/modelPresetStorage.js';
+import { PagePresetQuickSwitch } from './modelPresets/PagePresetQuickSwitch.jsx';
 import { PromptIterationConfigPanel } from './promptIteration/PromptIterationConfigPanel.jsx';
 import { PromptIterationFileList } from './promptIteration/PromptIterationFileList.jsx';
 import { PromptIterationResultsPanel } from './promptIteration/PromptIterationResultsPanel.jsx';
@@ -29,19 +35,20 @@ function hasAttachedFile(item) {
 }
 
 function createFallbackPromptIterationSettings() {
-  return {
+  return resolveSettingsWithPlatformDefaults({
     ...DEFAULT_LLM1_SETTINGS,
-    apiKey: import.meta.env.VITE_GEMINI_API_KEY || ''
-  };
+    apiKey: ''
+  });
 }
 
-export function FullFlowMode({ vm, modelPresets = [] }) {
+export function FullFlowMode({ vm, modelPresets = [], globalDefaultPresetId = '' }) {
   const [draft, setDraft] = useState(() => normalizePromptIterationDraft(null));
   const [selectedPresetId, setSelectedPresetId] = useState(() => loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION));
   const [history, setHistory] = useState([]);
   const [currentRun, setCurrentRun] = useState(null);
   const [activeResultTab, setActiveResultTab] = useState('current');
   const [isRunning, setIsRunning] = useState(false);
+  const [isSavingPromptAsset, setIsSavingPromptAsset] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [hasHydrated, setHasHydrated] = useState(false);
 
@@ -49,13 +56,32 @@ export function FullFlowMode({ vm, modelPresets = [] }) {
     () => resolvePagePreset(
       MODEL_PAGE_KEYS.PROMPT_ITERATION,
       modelPresets,
-      { [MODEL_PAGE_KEYS.PROMPT_ITERATION]: selectedPresetId }
+      { [MODEL_PAGE_KEYS.PROMPT_ITERATION]: selectedPresetId },
+      globalDefaultPresetId
     ),
-    [modelPresets, selectedPresetId]
+    [globalDefaultPresetId, modelPresets, selectedPresetId]
   );
   const runtimePresetSettings = useMemo(
     () => resolveRuntimeLlmConfig(selectedPreset),
     [selectedPreset]
+  );
+  const selectedPromptAssetEntry = useMemo(
+    () => (vm?.promptAssetEntries || []).find((entry) => entry.asset.id === draft.promptAssetId) || null,
+    [draft.promptAssetId, vm?.promptAssetEntries]
+  );
+  const promptAssetOptions = useMemo(
+    () => (vm?.promptAssetEntries || []).map((entry) => ({
+      value: entry.asset.id,
+      label: `${entry.asset.indicatorCode || '未编码'} · ${entry.asset.indicatorName || entry.asset.name || '未命名 Prompt'}`
+    })),
+    [vm?.promptAssetEntries]
+  );
+  const promptVersionOptions = useMemo(
+    () => (selectedPromptAssetEntry?.versions || []).map((version) => ({
+      value: version.id,
+      label: `${version.label || '未命名版本'} · ${new Date(version.createdAt || Date.now()).toLocaleString('zh-CN', { hour12: false })}`
+    })),
+    [selectedPromptAssetEntry]
   );
   const effectiveLlmSettings = useMemo(() => {
     const fallback = createFallbackPromptIterationSettings();
@@ -111,6 +137,21 @@ export function FullFlowMode({ vm, modelPresets = [] }) {
     savePromptIterationDraftFiles(draft.files).catch(() => {});
   }, [draft.files, hasHydrated]);
 
+  useEffect(() => {
+    if (!vm?.incomingPromptIterationSeed) {
+      return;
+    }
+
+    setDraft((previous) => normalizePromptIterationDraft({
+      ...previous,
+      ...vm.incomingPromptIterationSeed
+    }));
+    setCurrentRun(null);
+    setActiveResultTab('current');
+    setErrorMsg('');
+    vm.onConsumePromptIterationSeed?.();
+  }, [vm?.incomingPromptIterationSeed]);
+
   const runnableFiles = useMemo(
     () => draft.files.filter((item) => hasAttachedFile(item)),
     [draft.files]
@@ -130,6 +171,12 @@ export function FullFlowMode({ vm, modelPresets = [] }) {
     effectiveLlmSettings.apiUrl &&
     supportsPdfUpload &&
     !isRunning
+  );
+  const canSavePromptAsset = Boolean(
+    draft.userPrompt.trim() &&
+    (draft.promptAssetId || draft.promptIndicatorCode.trim()) &&
+    !isRunning &&
+    !isSavingPromptAsset
   );
 
   const handleRun = async () => {
@@ -159,30 +206,57 @@ export function FullFlowMode({ vm, modelPresets = [] }) {
     }
   };
 
+  const handleSavePromptAsset = async () => {
+    if (!canSavePromptAsset) {
+      return;
+    }
+
+    setIsSavingPromptAsset(true);
+    setErrorMsg('');
+    try {
+      const result = await savePromptAssetVersion({
+        assetId: draft.promptAssetId,
+        indicatorCode: draft.promptIndicatorCode,
+        indicatorName: draft.name,
+        systemPrompt: draft.systemPrompt,
+        userPromptTemplate: draft.userPrompt,
+        label: '快速迭代写回',
+        sourceType: 'iterated'
+      });
+      await vm?.onPromptAssetsChanged?.();
+      setDraft((previous) => normalizePromptIterationDraft({
+        ...previous,
+        promptAssetId: result.asset.id,
+        promptVersionId: result.version?.id || previous.promptVersionId,
+        promptIndicatorCode: result.asset.indicatorCode || previous.promptIndicatorCode
+      }));
+    } catch (error) {
+      setErrorMsg(error instanceof Error ? error.message : String(error));
+    } finally {
+      setIsSavingPromptAsset(false);
+    }
+  };
+
   return (
     <section className="prompt-iteration-panel">
-      <div className="section-heading workspace-heading prompt-iteration-heading">
-        <div className="prompt-iteration-heading-row">
-          <div>
-            <h2 className="section-title">
-              <IconSparkles size={20} stroke={1.8} />
-              <span>Prompt 快速迭代</span>
-            </h2>
-            <p className="section-caption prompt-iteration-caption">
-              快速修改同一套 Prompt，在多份 PDF 上试跑并横向比较结构化表现与原始返回。
-            </p>
-          </div>
-          {vm?.onOpenSettings ? (
-            <Button
-              variant="default"
-              leftSection={<IconSettings size={16} />}
-              onClick={vm.onOpenSettings}
-              disabled={isRunning}
-            >
-              模型配置
-            </Button>
-          ) : null}
-        </div>
+      <div className="testbench-subpage-toolbar">
+        <PagePresetQuickSwitch
+          presets={modelPresets}
+          preset={selectedPreset}
+          value={selectedPreset?.id || selectedPresetId}
+          requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.PROMPT_ITERATION]}
+          usesGlobalDefault={!selectedPresetId}
+          onChange={(presetId) => {
+            setSelectedPresetId(presetId);
+            savePageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION, presetId);
+          }}
+          onResetToGlobalDefault={() => {
+            setSelectedPresetId('');
+            clearPageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION);
+          }}
+          onOpenModelPresetManager={vm?.onOpenSettings}
+          disabled={isRunning}
+        />
       </div>
 
       {missingFileCount > 0 ? (
@@ -209,19 +283,38 @@ export function FullFlowMode({ vm, modelPresets = [] }) {
         llmSettings={effectiveLlmSettings}
         presetName={selectedPreset?.name}
         supportsPdfUpload={supportsPdfUpload}
+        promptAssetOptions={promptAssetOptions}
+        promptVersionOptions={promptVersionOptions}
+        selectedPromptAssetId={draft.promptAssetId}
+        selectedPromptVersionId={draft.promptVersionId}
+        onSelectPromptAsset={(assetId) => {
+          const entry = (vm?.promptAssetEntries || []).find((item) => item.asset.id === assetId) || null;
+          const version = entry?.latestVersion || entry?.versions?.[0] || null;
+          setDraft((previous) => normalizePromptIterationDraft({
+            ...previous,
+            name: entry?.asset?.indicatorName || entry?.asset?.name || previous.name,
+            systemPrompt: version?.systemPrompt || '',
+            userPrompt: version?.userPromptTemplate || '',
+            promptAssetId: entry?.asset?.id || '',
+            promptVersionId: version?.id || '',
+            promptIndicatorCode: entry?.asset?.indicatorCode || ''
+          }));
+        }}
+        onSelectPromptVersion={(versionId) => {
+          const version = selectedPromptAssetEntry?.versions?.find((item) => item.id === versionId) || null;
+          setDraft((previous) => normalizePromptIterationDraft({
+            ...previous,
+            systemPrompt: version?.systemPrompt || previous.systemPrompt,
+            userPrompt: version?.userPromptTemplate || previous.userPrompt,
+            promptVersionId: version?.id || '',
+            promptIndicatorCode: selectedPromptAssetEntry?.asset?.indicatorCode || previous.promptIndicatorCode
+          }));
+        }}
+        onOpenPromptAssetLibrary={vm?.onOpenPromptAssetLibrary}
+        onSavePromptAsset={handleSavePromptAsset}
+        canSavePromptAsset={canSavePromptAsset}
+        isSavingPromptAsset={isSavingPromptAsset}
       />
-
-      <div className="panel-block" style={{ marginTop: 14 }}>
-        <PagePresetSelect
-          presets={modelPresets}
-          value={selectedPreset?.id || selectedPresetId}
-          onChange={(presetId) => {
-            setSelectedPresetId(presetId);
-            savePageModelSelection(MODEL_PAGE_KEYS.PROMPT_ITERATION, presetId);
-          }}
-          requiredCapabilities={PAGE_REQUIRED_CAPABILITIES[MODEL_PAGE_KEYS.PROMPT_ITERATION]}
-        />
-      </div>
 
       <PromptIterationFileList
         draft={draft}

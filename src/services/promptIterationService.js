@@ -29,6 +29,9 @@ export function normalizePromptIterationDraft(raw) {
     name: String(draft.name || ''),
     systemPrompt: String(draft.systemPrompt || ''),
     userPrompt: String(draft.userPrompt || ''),
+    promptAssetId: String(draft.promptAssetId || ''),
+    promptVersionId: String(draft.promptVersionId || ''),
+    promptIndicatorCode: String(draft.promptIndicatorCode || ''),
     files: Array.isArray(draft.files)
       ? draft.files.map((item) => ({
           id: String(item?.id || ''),

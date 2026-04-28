@@ -17,12 +17,16 @@ const fixedDeps = {
 test('createPromptAsset 会裁剪名称并补全时间字段', () => {
   const asset = createPromptAsset({
     name: '  温室气体排放  ',
-    targetName: '  排放总量  '
+    targetName: '  排放总量  ',
+    indicatorCode: '  E1  ',
+    indicatorName: '  范围一排放  '
   }, fixedDeps);
 
   assert.equal(asset.id, 'passet_fixed');
   assert.equal(asset.name, '温室气体排放');
   assert.equal(asset.targetName, '排放总量');
+  assert.equal(asset.indicatorCode, 'E1');
+  assert.equal(asset.indicatorName, '范围一排放');
   assert.equal(asset.createdAt, 1713955200000);
   assert.equal(asset.updatedAt, 1713955200000);
 });

@@ -1,15 +1,22 @@
 export function parseExcel(file) {
+  const readWorkbook = async (arrayBuffer) => {
+    const XLSX = await import('xlsx');
+    const data = new Uint8Array(arrayBuffer);
+    const workbook = XLSX.read(data, { type: 'array', raw: true });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    return XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: '' });
+  };
+
+  if (typeof file?.arrayBuffer === 'function') {
+    return file.arrayBuffer().then(readWorkbook);
+  }
+
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = async (event) => {
       try {
-        const XLSX = await import('xlsx');
-        const data = new Uint8Array(event.target.result);
-        const workbook = XLSX.read(data, { type: 'array', raw: true });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = XLSX.utils.sheet_to_json(worksheet, { raw: false, defval: '' });
-        resolve(jsonData);
+        resolve(await readWorkbook(event.target.result));
       } catch (error) {
         reject(error);
       }

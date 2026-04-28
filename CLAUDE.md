@@ -14,7 +14,7 @@ npm run preview   # 预览生产构建结果
 
 暂无测试或代码检查命令。
 
-环境配置：将 `.env.example` 复制为 `.env`，填入 `VITE_GEMINI_API_KEY`。修改 `.env` 后需重启 `npm run dev`。
+环境配置：将 `.env.example` 复制为 `.env`，优先填写 `VITE_PLATFORM_DEFAULT_*` 这一组平台默认模型配置。旧的 `VITE_GEMINI_API_KEY` 仍兼容。修改 `.env` 后需重启 `npm run dev`。
 
 ## 架构概览
 

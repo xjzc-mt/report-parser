@@ -766,7 +766,7 @@ export const UnifiedAnalysisMerged = forwardRef(function UnifiedAnalysisMerged({
                 }
               }}
             >
-              跳转到快速优化
+              选择优化指标
             </Button>
           )}
         </div>

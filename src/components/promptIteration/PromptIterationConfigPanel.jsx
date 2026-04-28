@@ -1,4 +1,4 @@
-import { Badge, TextInput, Textarea } from '@mantine/core';
+import { Badge, Button, Select, TextInput, Textarea } from '@mantine/core';
 
 const PROVIDER_LABELS = {
   gemini: 'Gemini',
@@ -6,7 +6,23 @@ const PROVIDER_LABELS = {
   openai: 'OpenAI 兼容'
 };
 
-export function PromptIterationConfigPanel({ draft, onDraftChange, llmSettings, presetName, supportsPdfUpload }) {
+export function PromptIterationConfigPanel({
+  draft,
+  onDraftChange,
+  llmSettings,
+  presetName,
+  supportsPdfUpload,
+  promptAssetOptions = [],
+  promptVersionOptions = [],
+  selectedPromptAssetId = '',
+  selectedPromptVersionId = '',
+  onSelectPromptAsset,
+  onSelectPromptVersion,
+  onOpenPromptAssetLibrary,
+  onSavePromptAsset,
+  canSavePromptAsset = false,
+  isSavingPromptAsset = false
+}) {
   const updateField = (key, value) => {
     onDraftChange((previous) => ({
       ...previous,
@@ -29,6 +45,54 @@ export function PromptIterationConfigPanel({ draft, onDraftChange, llmSettings, 
 
       <div className="prompt-iteration-config-layout">
         <div className="prompt-iteration-input-stack">
+          <div className="prompt-iteration-prompt-source">
+            <div className="prompt-iteration-prompt-source-grid">
+              <Select
+                label="Prompt 资产"
+                placeholder={promptAssetOptions.length ? '选择一个基线 Prompt' : '先去导入 Prompt 资产'}
+                data={promptAssetOptions}
+                value={selectedPromptAssetId || null}
+                onChange={(value) => value && onSelectPromptAsset?.(value)}
+                searchable
+                clearable={false}
+                nothingFoundMessage="没有可选 Prompt 资产"
+                comboboxProps={{ withinPortal: false }}
+              />
+              <Select
+                label="版本"
+                placeholder={promptVersionOptions.length ? '选择一个版本' : '先选择 Prompt 资产'}
+                data={promptVersionOptions}
+                value={selectedPromptVersionId || null}
+                onChange={(value) => value && onSelectPromptVersion?.(value)}
+                searchable
+                clearable={false}
+                disabled={!selectedPromptAssetId || promptVersionOptions.length === 0}
+                nothingFoundMessage="没有可选版本"
+                comboboxProps={{ withinPortal: false }}
+              />
+            </div>
+            <div className="prompt-iteration-prompt-source-actions">
+              <p className="section-caption">
+                这里读取统一维护的原始 Prompt。选中后会自动带入下方系统提示词和用户提示词。
+              </p>
+              {onOpenPromptAssetLibrary ? (
+                <>
+                  <Button variant="default" radius="xl" onClick={onOpenPromptAssetLibrary}>
+                    管理 Prompt 资产
+                  </Button>
+                  <Button
+                    radius="xl"
+                    onClick={() => onSavePromptAsset?.()}
+                    disabled={!canSavePromptAsset}
+                    loading={isSavingPromptAsset}
+                  >
+                    写入 Prompt 资产库
+                  </Button>
+                </>
+              ) : null}
+            </div>
+          </div>
+
           <TextInput
             label="名称"
             placeholder="例如：温室气体排放总量"

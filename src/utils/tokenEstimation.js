@@ -1,5 +1,7 @@
 import { estimateCost } from '../services/llmClient.js';
 
+const CJK_TOKEN_WEIGHT = 1.2;
+
 function countCjkCharacters(text) {
   return (String(text || '').match(/[\u3400-\u9fff]/g) || []).length;
 }
@@ -12,13 +14,32 @@ export function estimateTextTokens(text) {
   const normalizedText = String(text || '');
   const cjkCharacters = countCjkCharacters(normalizedText);
   const nonCjkCharacters = countNonCjkCharacters(normalizedText);
-  const estimatedTokens = Math.ceil(cjkCharacters + (nonCjkCharacters / 4));
+  const estimatedTokens = Math.ceil((cjkCharacters * CJK_TOKEN_WEIGHT) + (nonCjkCharacters / 4));
 
   return {
     characters: normalizedText.length,
     cjkCharacters,
     nonCjkCharacters,
     estimatedTokens
+  };
+}
+
+export function estimateBase64EncodedLength(bytes) {
+  const normalizedBytes = Math.max(0, Number(bytes) || 0);
+  if (normalizedBytes === 0) {
+    return 0;
+  }
+  return Math.ceil(normalizedBytes / 3) * 4;
+}
+
+export function estimateBase64TokensFromBytes(bytes) {
+  const normalizedBytes = Math.max(0, Number(bytes) || 0);
+  const base64Characters = estimateBase64EncodedLength(normalizedBytes);
+
+  return {
+    bytes: normalizedBytes,
+    base64Characters,
+    estimatedTokens: Math.ceil(base64Characters / 4)
   };
 }
 

@@ -11,7 +11,14 @@ import { runExtractionJob } from './services/extractionService.js';
 import { initializeModelPresetSystem } from './services/modelPresetService.js';
 import { getPresetCapabilityError, resolvePagePreset, resolveRuntimeLlmConfig } from './services/modelPresetResolver.js';
 import { LS_ACTIVE_APP_TAB, normalizeAppTabKey } from './utils/labNavigationState.js';
-import { loadPageModelSelection, saveModelPresets, savePageModelSelection } from './utils/modelPresetStorage.js';
+import { normalizeGlobalSettings } from './utils/globalSettings.js';
+import {
+  clearPageModelSelection,
+  loadPageModelSelection,
+  saveGlobalDefaultModelSelection,
+  saveModelPresets,
+  savePageModelSelection
+} from './utils/modelPresetStorage.js';
 import { getSelectedIndicatorTypes, isResultFound } from './utils/extraction.js';
 
 const LS_SETTINGS = 'intelliextract_settings';
@@ -19,13 +26,13 @@ const LS_SETTINGS = 'intelliextract_settings';
 function loadGlobalSettings() {
   try {
     const raw = localStorage.getItem(LS_SETTINGS);
-    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+    if (raw) return normalizeGlobalSettings(JSON.parse(raw));
   } catch (_) { /* ignore */ }
-  return { ...DEFAULT_SETTINGS };
+  return normalizeGlobalSettings(DEFAULT_SETTINGS);
 }
 
 function saveGlobalSettings(settings) {
-  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(settings)); } catch (_) { /* ignore */ }
+  try { localStorage.setItem(LS_SETTINGS, JSON.stringify(normalizeGlobalSettings(settings))); } catch (_) { /* ignore */ }
 }
 
 const TestWorkbenchTab = lazy(() => import('./components/TestWorkbenchTab.jsx').then((module) => ({
@@ -64,11 +71,16 @@ function loadActiveTab() {
 }
 
 export default function App() {
+  const initialModelPresetState = useMemo(
+    () => initializeModelPresetSystem(import.meta.env),
+    []
+  );
   const [activeTab, setActiveTab] = useState(loadActiveTab);
   const [hasVisitedTestbench, setHasVisitedTestbench] = useState(() => loadActiveTab() === 'test-workbench');
   const [settings, setSettings] = useState(loadGlobalSettings);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [modelPresets, setModelPresets] = useState(() => initializeModelPresetSystem(import.meta.env).presets);
+  const [modelPresets, setModelPresets] = useState(() => initialModelPresetState.presets);
+  const [globalDefaultPresetId, setGlobalDefaultPresetId] = useState(() => initialModelPresetState.globalDefaultPresetId || '');
   const [onlineValidationPresetId, setOnlineValidationPresetId] = useState(() => (
     loadPageModelSelection(MODEL_PAGE_KEYS.ONLINE_VALIDATION)
   ));
@@ -82,16 +94,17 @@ export default function App() {
   const resultsAnchorRef = useRef(null);
 
   const selectedIndicatorTypes = useMemo(
-    () => getSelectedIndicatorTypes(settings.indicatorTypes),
+    () => getSelectedIndicatorTypes(normalizeGlobalSettings(settings).indicatorTypes),
     [settings.indicatorTypes]
   );
   const onlineValidationPreset = useMemo(
     () => resolvePagePreset(
       MODEL_PAGE_KEYS.ONLINE_VALIDATION,
       modelPresets,
-      { [MODEL_PAGE_KEYS.ONLINE_VALIDATION]: onlineValidationPresetId }
+      { [MODEL_PAGE_KEYS.ONLINE_VALIDATION]: onlineValidationPresetId },
+      globalDefaultPresetId
     ),
-    [modelPresets, onlineValidationPresetId]
+    [globalDefaultPresetId, modelPresets, onlineValidationPresetId]
   );
   const onlineValidationRuntimeConfig = useMemo(
     () => resolveRuntimeLlmConfig(onlineValidationPreset),
@@ -143,7 +156,7 @@ export default function App() {
 
   const handleSettingChange = (key, value) => {
     setSettings((previous) => {
-      const next = { ...previous, [key]: value };
+      const next = normalizeGlobalSettings({ ...previous, [key]: value });
       saveGlobalSettings(next);
       return next;
     });
@@ -159,8 +172,9 @@ export default function App() {
         ...previous,
         indicatorTypes: nextTypes
       };
-      saveGlobalSettings(next);
-      return next;
+      const normalized = normalizeGlobalSettings(next);
+      saveGlobalSettings(normalized);
+      return normalized;
     });
   };
 
@@ -380,9 +394,14 @@ export default function App() {
         <OnlineValidationWorkbench
           modelPresets={modelPresets}
           selectedPresetId={onlineValidationPreset?.id || onlineValidationPresetId}
+          usesGlobalDefault={!onlineValidationPresetId}
           onSelectPreset={(presetId) => {
             setOnlineValidationPresetId(presetId);
             savePageModelSelection(MODEL_PAGE_KEYS.ONLINE_VALIDATION, presetId);
+          }}
+          onResetPreset={() => {
+            setOnlineValidationPresetId('');
+            clearPageModelSelection(MODEL_PAGE_KEYS.ONLINE_VALIDATION);
           }}
           onOpenModelPresetManager={() => setSettingsOpen(true)}
           presetCapabilityError={onlineValidationCapabilityError}
@@ -412,6 +431,7 @@ export default function App() {
         <DataPreprocessingWorkbench
           globalSettings={settings}
           modelPresets={modelPresets}
+          globalDefaultPresetId={globalDefaultPresetId}
           onOpenModelPresetManager={() => setSettingsOpen(true)}
         />
       ) : activeTab === 'docs' ? (
@@ -425,6 +445,7 @@ export default function App() {
             <TestWorkbenchTab
               globalSettings={settings}
               modelPresets={modelPresets}
+              globalDefaultPresetId={globalDefaultPresetId}
               onOpenModelPresetManager={() => setSettingsOpen(true)}
             />
           </Suspense>
@@ -435,9 +456,20 @@ export default function App() {
         opened={settingsOpen}
         onClose={() => setSettingsOpen(false)}
         presets={modelPresets}
+        globalDefaultPresetId={globalDefaultPresetId}
+        onChangeGlobalDefaultPresetId={(presetId) => {
+          setGlobalDefaultPresetId(presetId);
+          saveGlobalDefaultModelSelection(presetId);
+        }}
         onChangePresets={(nextPresets) => {
           setModelPresets(nextPresets);
           saveModelPresets(nextPresets);
+          const hasCurrentGlobalDefault = nextPresets.some((item) => item.id === globalDefaultPresetId);
+          if (!hasCurrentGlobalDefault) {
+            const fallbackPresetId = nextPresets.find((item) => item.isDefault)?.id || nextPresets[0]?.id || '';
+            setGlobalDefaultPresetId(fallbackPresetId);
+            saveGlobalDefaultModelSelection(fallbackPresetId);
+          }
         }}
       />
     </main>

@@ -54,6 +54,18 @@ test('resolvePagePreset 优先命中页面选择，其次回退默认预设', ()
 
   assert.equal(resolvePagePreset('prompt-iteration', presets, {
     'prompt-iteration': 'preset_secondary'
-  })?.id, 'preset_secondary');
-  assert.equal(resolvePagePreset('prompt-iteration', presets, {})?.id, 'preset_default');
+  }, 'preset_default')?.id, 'preset_secondary');
+  assert.equal(resolvePagePreset('prompt-iteration', presets, {}, 'preset_default')?.id, 'preset_default');
+});
+
+test('resolvePagePreset 在页面未单独设置时优先使用全局默认选择', () => {
+  const presets = [
+    { id: 'preset_gemini_default', isDefault: true },
+    { id: 'preset_openai_default', isDefault: false }
+  ];
+
+  assert.equal(
+    resolvePagePreset('prompt-iteration', presets, {}, 'preset_openai_default')?.id,
+    'preset_openai_default'
+  );
 });

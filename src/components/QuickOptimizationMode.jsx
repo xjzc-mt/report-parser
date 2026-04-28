@@ -1,18 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Tabs } from '@mantine/core';
+import { Button, Tabs } from '@mantine/core';
 import { MODEL_PAGE_KEYS, PAGE_REQUIRED_CAPABILITIES } from '../constants/modelPresets.js';
 import {
   applyOptimizationCandidate,
   createDatasetFromComparisonRows,
   startPromptOptimizationRun
 } from '../services/promptOptimizationService.js';
-import { listPromptOptimizationRuns } from '../services/promptOptimizationRepository.js';
+import {
+  clearPromptOptimizationRunHistory,
+  getPromptOptimizationRun,
+  getPromptOptimizationStrategyEntry,
+  getPromptOptimizationWorkspaceEntry,
+  listPromptOptimizationRunSummaries,
+  restorePromptOptimizationWorkspaceFiles,
+  savePromptOptimizationStrategyEntry,
+  savePromptOptimizationWorkspaceEntry,
+  savePromptOptimizationWorkspaceFiles
+} from '../services/promptOptimizationRepository.js';
 import {
   checkPdfMatching,
-  exportFinalResults,
   filterRowsByPdfAvailability,
-  parseComparisonFile,
-  runOptimizationPhase
+  parseComparisonFile
 } from '../services/testBenchService.js';
 import {
   clearPageModelSelection,
@@ -25,8 +33,10 @@ import {
   summarizeOptimizationRun
 } from '../utils/promptOptimizationModel.js';
 import {
-  buildPromptOptimizationRunSnapshot,
-  buildPromptOptimizationTargetOptions
+  buildPromptOptimizationBatchTargets,
+  buildPromptOptimizationIndicatorCatalog,
+  buildPromptOptimizationSelectionSummary,
+  buildIncomingOptimizationWorkspaceState,
 } from '../utils/promptOptimizationViewModel.js';
 import {
   getPresetCapabilityError,
@@ -35,8 +45,28 @@ import {
 } from '../services/modelPresetResolver.js';
 import { PagePresetQuickSwitch } from './modelPresets/PagePresetQuickSwitch.jsx';
 import { OptimizationHistoryPanel } from './promptOptimization/OptimizationHistoryPanel.jsx';
+import { OptimizationTargetPickerModal } from './promptOptimization/OptimizationTargetPickerModal.jsx';
 import { OptimizationReviewPanel } from './promptOptimization/OptimizationReviewPanel.jsx';
 import { OptimizationSetupPanel } from './promptOptimization/OptimizationSetupPanel.jsx';
+import { OptimizationStrategyDrawer } from './promptOptimization/OptimizationStrategyDrawer.jsx';
+import {
+  buildPromptIterationSeed,
+  findPromptAssetEntryByIndicatorCode,
+  resolvePromptAssetBaseline
+} from '../services/promptAssetLibraryService.js';
+import {
+  DEFAULT_PROMPT_OPTIMIZATION_STRATEGY,
+  normalizePromptOptimizationStrategy
+} from '../services/promptOptimizationStrategyService.js';
+import {
+  exportPromptOptimizationRunWorkbook
+} from '../services/promptOptimizationExportService.js';
+import {
+  generateOptimizationCandidate,
+  reviewOptimizationValidation,
+  runOptimizationDiagnosis,
+  validateOptimizationCandidate
+} from '../services/promptOptimizationRuntimeService.js';
 
 function withRunSummary(run) {
   const summary = summarizeOptimizationRun(run);
@@ -51,25 +81,47 @@ function normalizeIndicatorCode(value) {
   return String(value || '').trim();
 }
 
+function getWorkspaceFileId(file) {
+  return `${file.name}__${file.size}__${file.lastModified}`;
+}
+
+function normalizePersistedNumber(value, fallback) {
+  if (value === null || value === undefined || value === '') {
+    return fallback;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 export function QuickOptimizationMode({
   llm2Settings,
   modelPresets = [],
   globalDefaultPresetId = '',
   onOpenModelPresetManager,
-  preselectedCodes = []
+  promptAssetEntries = [],
+  onOpenPromptAssetLibrary,
+  onPromptAssetsChanged,
+  incomingContext = null,
+  onConsumeIncomingContext,
+  onSendToPromptIteration
 }) {
   const [selectedPresetId, setSelectedPresetId] = useState(() => loadPageModelSelection(MODEL_PAGE_KEYS.PROMPT_OPTIMIZATION));
   const [comparisonFile, setComparisonFile] = useState(null);
   const [pdfFiles, setPdfFiles] = useState([]);
   const [comparisonRows, setComparisonRows] = useState([]);
-  const [selectedTargetCode, setSelectedTargetCode] = useState('');
-  const [targetName, setTargetName] = useState('');
+  const [selectedTargetCodes, setSelectedTargetCodes] = useState([]);
   const [maxIterations, setMaxIterations] = useState(2);
+  const [targetScoreThreshold, setTargetScoreThreshold] = useState(90);
   const [isOptimizing, setIsOptimizing] = useState(false);
+  const [optimizationProgress, setOptimizationProgress] = useState(null);
   const [error, setError] = useState('');
   const [runs, setRuns] = useState([]);
   const [currentRun, setCurrentRun] = useState(null);
   const [activeTab, setActiveTab] = useState('setup');
+  const [strategyOpened, setStrategyOpened] = useState(false);
+  const [targetPickerOpened, setTargetPickerOpened] = useState(false);
+  const [strategy, setStrategy] = useState(() => ({ ...DEFAULT_PROMPT_OPTIMIZATION_STRATEGY }));
+  const [hasHydrated, setHasHydrated] = useState(false);
 
   const selectedPreset = useMemo(
     () => resolvePagePreset(
@@ -92,14 +144,75 @@ export function QuickOptimizationMode({
     [selectedPreset]
   );
 
-  const targetOptions = useMemo(
-    () => buildPromptOptimizationTargetOptions(comparisonRows, preselectedCodes),
-    [comparisonRows, preselectedCodes]
+  const indicatorCatalog = useMemo(
+    () => buildPromptOptimizationIndicatorCatalog(comparisonRows),
+    [comparisonRows]
   );
-
+  const selectedTargets = useMemo(
+    () => buildPromptOptimizationBatchTargets(comparisonRows, selectedTargetCodes),
+    [comparisonRows, selectedTargetCodes]
+  );
   const selectedTargetRows = useMemo(
-    () => comparisonRows.filter((row) => normalizeIndicatorCode(row?.indicator_code) === selectedTargetCode),
-    [comparisonRows, selectedTargetCode]
+    () => selectedTargets.flatMap((target) => target.rows),
+    [selectedTargets]
+  );
+  const baselineStatesByCode = useMemo(
+    () => {
+      const map = new Map();
+      selectedTargets.forEach((target) => {
+        map.set(target.code, {
+          promptAssetEntry: findPromptAssetEntryByIndicatorCode(promptAssetEntries, target.code),
+          baselineState: resolvePromptAssetBaseline({
+            indicatorCode: target.code,
+            promptAssetEntries,
+            comparisonRows: target.rows
+          })
+        });
+      });
+      return map;
+    },
+    [promptAssetEntries, selectedTargets]
+  );
+  const baselineSummary = useMemo(
+    () => {
+      const summary = {
+        selectedCount: selectedTargets.length,
+        libraryCount: 0,
+        comparisonCount: 0,
+        missingCount: 0,
+        missingTargets: [],
+        previewPrompt: '',
+        hasNonLibraryTarget: false
+      };
+
+      selectedTargets.forEach((target) => {
+        const state = baselineStatesByCode.get(target.code)?.baselineState;
+        if (state?.source === 'library') {
+          summary.libraryCount += 1;
+        } else if (state?.source === 'comparison_file') {
+          summary.comparisonCount += 1;
+          summary.hasNonLibraryTarget = true;
+        } else {
+          summary.missingCount += 1;
+          summary.hasNonLibraryTarget = true;
+          summary.missingTargets.push({
+            code: target.code,
+            name: target.name
+          });
+        }
+
+        if (!summary.previewPrompt && state?.userPromptTemplate && selectedTargets.length === 1) {
+          summary.previewPrompt = state.userPromptTemplate;
+        }
+      });
+
+      return summary;
+    },
+    [baselineStatesByCode, selectedTargets]
+  );
+  const selectionSummary = useMemo(
+    () => buildPromptOptimizationSelectionSummary(indicatorCatalog, selectedTargetCodes),
+    [indicatorCatalog, selectedTargetCodes]
   );
 
   const requiredReports = useMemo(
@@ -108,9 +221,9 @@ export function QuickOptimizationMode({
   );
 
   const canOptimize = Boolean(
-    selectedTargetRows.length > 0 &&
+    selectedTargets.length > 0 &&
     pdfFiles.length > 0 &&
-    targetName.trim() &&
+    baselineSummary.missingCount === 0 &&
     runtimeConfig?.apiKey &&
     !capabilityError &&
     !isOptimizing
@@ -119,14 +232,56 @@ export function QuickOptimizationMode({
   useEffect(() => {
     let cancelled = false;
 
-    listPromptOptimizationRuns()
-      .then((historyRuns) => {
+    (async () => {
+      try {
+        const [historyRuns, savedStrategy, workspace] = await Promise.all([
+          listPromptOptimizationRunSummaries(),
+          getPromptOptimizationStrategyEntry(),
+          getPromptOptimizationWorkspaceEntry()
+        ]);
+
         if (cancelled) {
           return;
         }
-        setRuns(historyRuns.map(withRunSummary));
-      })
-      .catch(() => {});
+
+        const normalizedRuns = historyRuns.map(withRunSummary);
+        setRuns(normalizedRuns);
+        setStrategy(normalizePromptOptimizationStrategy(savedStrategy));
+
+        if (workspace) {
+          const restoredWorkspace = await restorePromptOptimizationWorkspaceFiles(workspace);
+          if (cancelled) {
+            return;
+          }
+
+          setComparisonRows(Array.isArray(restoredWorkspace.comparisonRows) ? restoredWorkspace.comparisonRows : []);
+          const restoredCodes = Array.isArray(restoredWorkspace.selectedTargetCodes)
+            ? restoredWorkspace.selectedTargetCodes.map((value) => normalizeIndicatorCode(value)).filter(Boolean)
+            : normalizeIndicatorCode(restoredWorkspace.selectedTargetCode)
+              ? [normalizeIndicatorCode(restoredWorkspace.selectedTargetCode)]
+              : [];
+          setSelectedTargetCodes(restoredCodes);
+          setMaxIterations(normalizePersistedNumber(restoredWorkspace.maxIterations, 2));
+          setTargetScoreThreshold(normalizePersistedNumber(restoredWorkspace.targetScoreThreshold, 90));
+          setActiveTab(String(restoredWorkspace.activeTab || 'setup'));
+          setComparisonFile(restoredWorkspace.comparisonFile?.file || null);
+          setPdfFiles((restoredWorkspace.pdfFiles || []).map((item) => item.file).filter(Boolean));
+
+          if (restoredWorkspace.currentRunId) {
+            const savedRun = await getPromptOptimizationRun(restoredWorkspace.currentRunId);
+            setCurrentRun(savedRun || null);
+          }
+        }
+      } catch (_) {
+        if (!cancelled) {
+          setStrategy(normalizePromptOptimizationStrategy(null));
+        }
+      } finally {
+        if (!cancelled) {
+          setHasHydrated(true);
+        }
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -134,24 +289,80 @@ export function QuickOptimizationMode({
   }, []);
 
   useEffect(() => {
-    if (!targetOptions.length) {
-      setSelectedTargetCode('');
+    if (!hasHydrated) {
       return;
     }
 
-    setSelectedTargetCode((previous) => (
-      targetOptions.some((option) => option.value === previous)
-        ? previous
-        : targetOptions[0].value
-    ));
-  }, [targetOptions]);
+    savePromptOptimizationWorkspaceEntry({
+      comparisonRows,
+      selectedTargetCodes,
+      selectedTargetCode: selectedTargetCodes[0] || '',
+      maxIterations,
+      targetScoreThreshold,
+      activeTab,
+      currentRunId: currentRun?.id || '',
+      comparisonFile: comparisonFile ? {
+        id: getWorkspaceFileId(comparisonFile),
+        name: comparisonFile.name,
+        type: comparisonFile.type
+      } : null,
+      pdfFiles: pdfFiles.map((file) => ({
+        id: getWorkspaceFileId(file),
+        name: file.name,
+        type: file.type
+      }))
+    }).catch(() => {});
+  }, [activeTab, comparisonFile, comparisonRows, currentRun?.id, hasHydrated, maxIterations, pdfFiles, selectedTargetCodes, targetScoreThreshold]);
 
   useEffect(() => {
-    const option = targetOptions.find((item) => item.value === selectedTargetCode);
-    if (option) {
-      setTargetName(option.name);
+    if (!hasHydrated) {
+      return;
     }
-  }, [selectedTargetCode, targetOptions]);
+
+    savePromptOptimizationWorkspaceFiles({
+      comparisonFile: comparisonFile ? {
+        id: getWorkspaceFileId(comparisonFile),
+        file: comparisonFile
+      } : null,
+      pdfFiles: pdfFiles.map((file) => ({
+        id: getWorkspaceFileId(file),
+        file
+      }))
+    }).catch(() => {});
+  }, [comparisonFile, pdfFiles, hasHydrated]);
+
+  useEffect(() => {
+    if (!indicatorCatalog.length) {
+      setSelectedTargetCodes([]);
+      return;
+    }
+
+    const availableCodes = new Set(indicatorCatalog.map((item) => item.code));
+    setSelectedTargetCodes((previous) => {
+      const next = previous.filter((code) => availableCodes.has(code));
+      return next.length > 0 ? next : [indicatorCatalog[0].code];
+    });
+  }, [indicatorCatalog]);
+
+  useEffect(() => {
+    if (!hasHydrated || !incomingContext?.id) {
+      return;
+    }
+
+    const nextState = buildIncomingOptimizationWorkspaceState({
+      comparisonRows: incomingContext.comparisonRows,
+      comparisonFile: incomingContext.comparisonFile,
+      selectedCodes: incomingContext.selectedCodes || incomingContext.preselectedCodes
+    });
+
+    setComparisonRows(nextState.comparisonRows);
+    setComparisonFile(nextState.comparisonFile || null);
+    setSelectedTargetCodes(nextState.selectedTargetCodes || []);
+    setCurrentRun(null);
+    setError('');
+    setActiveTab(nextState.activeTab);
+    onConsumeIncomingContext?.();
+  }, [hasHydrated, incomingContext, onConsumeIncomingContext]);
 
   const handleComparisonFileSelect = async (file) => {
     setComparisonFile(file);
@@ -168,8 +379,7 @@ export function QuickOptimizationMode({
   const handleComparisonFileRemove = () => {
     setComparisonFile(null);
     setComparisonRows([]);
-    setSelectedTargetCode('');
-    setTargetName('');
+    setSelectedTargetCodes([]);
     setError('');
   };
 
@@ -186,25 +396,23 @@ export function QuickOptimizationMode({
       return;
     }
 
+    const failedTargets = [];
+    const completedRuns = [];
+
     setIsOptimizing(true);
+    setOptimizationProgress({
+      status: 'running',
+      phase: 'initializing',
+      round: 0,
+      totalRounds: maxIterations,
+      percent: 0,
+      batchIndex: 0,
+      batchTotal: selectedTargets.length,
+      message: '开始准备自动优化运行'
+    });
     setError('');
 
     try {
-      const baselinePrompt = String(
-        selectedTargetRows.find((row) => String(row.prompt || '').trim())?.prompt || ''
-      ).trim();
-
-      if (!baselinePrompt) {
-        throw new Error('当前目标缺少基线 Prompt，无法开始优化。');
-      }
-
-      const matchResult = checkPdfMatching(requiredReports, pdfFiles);
-      const { optimizableRows } = filterRowsByPdfAvailability(selectedTargetRows, matchResult.matched);
-
-      if (!optimizableRows.length) {
-        throw new Error('当前目标没有可优化的行，请检查 PDF 是否完整上传。');
-      }
-
       const llmSettings = {
         ...llm2Settings,
         apiUrl: runtimeConfig.apiUrl,
@@ -212,84 +420,196 @@ export function QuickOptimizationMode({
         modelName: runtimeConfig.modelName,
         providerType: runtimeConfig.providerType,
         capabilities: runtimeConfig.capabilities,
-        maxOptIterations: maxIterations
+        maxOptIterations: maxIterations,
+        targetScoreThreshold
       };
 
-      const asset = createPromptAsset({
-        name: targetName.trim(),
-        targetName: targetName.trim()
-      });
-      const baselineVersion = createPromptVersion({
-        assetId: asset.id,
-        label: '基线版本',
-        userPromptTemplate: baselinePrompt
-      });
-      const dataset = createDatasetFromComparisonRows({
-        name: `${targetName.trim()} 数据集`,
-        targetName: targetName.trim(),
-        comparisonRows: optimizableRows,
-        pdfFileIds: pdfFiles.map((file) => file.name)
-      });
+      for (const [index, target] of selectedTargets.entries()) {
+        try {
+          const targetBaseline = baselineStatesByCode.get(target.code)?.baselineState;
+          const targetPromptAssetEntry = baselineStatesByCode.get(target.code)?.promptAssetEntry;
+          const baselinePrompt = String(targetBaseline?.userPromptTemplate || '').trim();
 
-      const result = await startPromptOptimizationRun({
-        asset,
-        baselineVersion,
-        dataset,
-        pdfFiles,
-        llmSettings
-      }, {
-        engine: async (engineInput) => {
+          if (!baselinePrompt) {
+            throw new Error('缺少基线 Prompt');
+          }
+
+          const targetReports = Array.from(new Set(target.rows.map((row) => String(row.report_name || '').trim()).filter(Boolean)));
+          const matchResult = checkPdfMatching(targetReports, pdfFiles);
+          const { optimizableRows } = filterRowsByPdfAvailability(target.rows, matchResult.matched);
+
+          if (!optimizableRows.length) {
+            throw new Error('没有可优化的有效样本');
+          }
+
+          const initialAsset = targetPromptAssetEntry?.asset
+            ? createPromptAsset({
+                ...targetPromptAssetEntry.asset,
+                latestVersionId: targetPromptAssetEntry.asset.latestVersionId,
+                indicatorCode: targetPromptAssetEntry.asset.indicatorCode || target.code,
+                indicatorName: targetPromptAssetEntry.asset.indicatorName || target.name,
+                updatedAt: Date.now()
+              })
+            : createPromptAsset({
+                name: target.name || target.code,
+                targetName: target.name,
+                indicatorCode: target.code,
+                indicatorName: target.name
+              });
+          const baselineVersion = targetBaseline?.source === 'library' && targetBaseline.version
+            ? createPromptVersion({
+                ...targetBaseline.version,
+                assetId: initialAsset.id
+              })
+            : createPromptVersion({
+                assetId: initialAsset.id,
+                label: targetBaseline?.source === 'comparison_file' ? '对比文件基线' : '基线版本',
+                systemPrompt: targetBaseline?.systemPrompt,
+                userPromptTemplate: baselinePrompt,
+                sourceType: targetBaseline?.source === 'comparison_file' ? 'comparison_file' : 'manual'
+              });
+          const asset = createPromptAsset({
+            ...initialAsset,
+            latestVersionId: baselineVersion.id
+          });
+          const dataset = createDatasetFromComparisonRows({
+            name: `${target.name} 数据集`,
+            targetName: target.name,
+            comparisonRows: optimizableRows,
+            pdfFileIds: pdfFiles.map((file) => file.name)
+          });
           const tokenStats = {
             optInput: 0,
             optOutput: 0,
             extractInput: 0,
             extractOutput: 0
           };
-          const legacyResult = await runOptimizationPhase({
-            pdfFiles: engineInput.pdfFiles,
-            comparisonRows: engineInput.comparisonRows,
-            llm2Settings: engineInput.llmSettings,
-            onProgress: () => {},
-            onOptLog: () => {},
+          const contextCache = new Map();
+
+          const result = await startPromptOptimizationRun({
+            asset,
+            baselineVersion,
+            dataset,
+            pdfFiles,
+            llmSettings,
+            strategy,
+            tokenStats
+          }, {
+            engineDeps: {
+              runDiagnosis: (engineInput) => runOptimizationDiagnosis({
+                ...engineInput,
+                llmSettings,
+                strategy,
+                tokenStats,
+                maxRetries: llmSettings.maxRetries || 3,
+                contextCache
+              }),
+              generateCandidate: (engineInput) => generateOptimizationCandidate({
+                ...engineInput,
+                llmSettings,
+                strategy,
+                tokenStats,
+                maxRetries: llmSettings.maxRetries || 3
+              }),
+              validateCandidate: (engineInput) => validateOptimizationCandidate({
+                ...engineInput,
+                llmSettings,
+                strategy,
+                tokenStats,
+                maxRetries: llmSettings.maxRetries || 3
+              }),
+              reviewValidation: (engineInput) => reviewOptimizationValidation({
+                ...engineInput,
+                llmSettings,
+                strategy,
+                tokenStats,
+                maxRetries: llmSettings.maxRetries || 3
+              }),
+              onProgress: (event) => {
+                setOptimizationProgress({
+                  ...event,
+                  batchIndex: index + 1,
+                  batchTotal: selectedTargets.length,
+                  indicatorCode: target.code,
+                  indicatorName: target.name,
+                  message: `第 ${index + 1}/${selectedTargets.length} 个指标 · ${target.code} ${target.name} · ${event.message || ''}`.trim()
+                });
+              }
+            }
+          });
+
+          const nextRun = withRunSummary({
+            ...result.run,
             tokenStats
           });
-          const snapshot = buildPromptOptimizationRunSnapshot({
-            assetId: engineInput.assetId,
-            baselineVersionId: engineInput.baselineVersion.id,
-            baselinePromptText: engineInput.baselineVersion.userPromptTemplate,
-            targetName: targetName.trim(),
-            rows: engineInput.comparisonRows,
-            updatedRows: legacyResult.rows,
-            iterationDetails: legacyResult.iterationDetails,
-            llmSettings: engineInput.llmSettings,
-            now: () => Date.now()
+          completedRuns.push(nextRun);
+        } catch (targetError) {
+          failedTargets.push({
+            code: target.code,
+            name: target.name,
+            message: targetError instanceof Error ? targetError.message : String(targetError)
           });
-
-          return {
-            run: {
-              ...snapshot.run,
-              datasetId: engineInput.datasetId,
-              tokenStats
-            },
-            resultRows: snapshot.resultRows
-          };
         }
+      }
+
+      if (completedRuns.length > 0) {
+        const orderedNewRuns = [...completedRuns].reverse();
+        const latestRun = completedRuns[completedRuns.length - 1];
+        setCurrentRun(latestRun);
+        setRuns((previous) => [
+          ...orderedNewRuns,
+          ...previous.filter((item) => !orderedNewRuns.some((newRun) => newRun.id === item.id))
+        ]);
+        setActiveTab(completedRuns.length > 1 ? 'history' : 'review');
+        await onPromptAssetsChanged?.();
+      }
+
+      setOptimizationProgress({
+        status: failedTargets.length > 0 && completedRuns.length === 0 ? 'error' : 'completed',
+        phase: failedTargets.length > 0 && completedRuns.length === 0 ? 'failed' : 'completed',
+        round: maxIterations,
+        totalRounds: maxIterations,
+        percent: 100,
+        batchIndex: selectedTargets.length,
+        batchTotal: selectedTargets.length,
+        message: `完成 ${selectedTargets.length} 个指标处理，成功 ${completedRuns.length} 个，失败 ${failedTargets.length} 个`
       });
 
-      const nextRun = withRunSummary(result.run);
-      setCurrentRun(nextRun);
-      setRuns((previous) => [nextRun, ...previous.filter((item) => item.id !== nextRun.id)]);
-      setActiveTab('review');
+      if (failedTargets.length > 0) {
+        setError(
+          `以下指标未完成自动优化：${failedTargets.map((item) => `${item.code}(${item.message})`).join('，')}`
+        );
+      }
     } catch (err) {
+      setOptimizationProgress({
+        status: 'error',
+        phase: 'failed',
+        round: 0,
+        totalRounds: maxIterations,
+        percent: 0,
+        message: err instanceof Error ? err.message : String(err)
+      });
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setIsOptimizing(false);
     }
   };
 
-  const handleSelectRun = (run) => {
-    setCurrentRun(withRunSummary(run));
+  const handleSelectRun = async (run) => {
+    const detail = run?.rounds ? run : await getPromptOptimizationRun(run?.id);
+    if (!detail) {
+      setError('未找到该次优化运行的完整记录。');
+      return;
+    }
+    setCurrentRun(withRunSummary(detail));
     setActiveTab('review');
+  };
+
+  const handleClearHistory = async () => {
+    await clearPromptOptimizationRunHistory();
+    setRuns([]);
+    setCurrentRun(null);
+    setActiveTab('setup');
   };
 
   const handleApplyCandidate = async (candidateId) => {
@@ -298,13 +618,15 @@ export function QuickOptimizationMode({
     }
 
     try {
+      const currentRunAssetEntry = promptAssetEntries.find((entry) => entry.asset.id === currentRun.assetId) || null;
       const nextRun = withRunSummary(await applyOptimizationCandidate({
-        asset: { id: currentRun.assetId },
+        asset: currentRunAssetEntry?.asset || { id: currentRun.assetId },
         run: currentRun,
         candidateId
       }));
       setCurrentRun(nextRun);
       setRuns((previous) => previous.map((item) => (item.id === nextRun.id ? nextRun : item)));
+      await onPromptAssetsChanged?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setActiveTab('setup');
@@ -315,16 +637,12 @@ export function QuickOptimizationMode({
     if (!currentRun?.resultRows?.length) {
       return;
     }
-    exportFinalResults(currentRun.resultRows, currentRun.tokenStats || {}, currentRun.iterationDetails || []);
+    exportPromptOptimizationRunWorkbook(currentRun);
   };
 
   return (
     <section className="quick-optimization-mode">
-      <div className="panel-header prompt-optimization-shell-head">
-        <div>
-          <h3>Prompt 自动优化</h3>
-          <p>当前先针对单个提取目标做 Prompt 文本优化，历史运行会保留在本地。</p>
-        </div>
+      <div className="testbench-subpage-toolbar">
         <PagePresetQuickSwitch
           presets={modelPresets}
           preset={selectedPreset}
@@ -342,13 +660,10 @@ export function QuickOptimizationMode({
           onOpenModelPresetManager={onOpenModelPresetManager}
           disabled={isOptimizing}
         />
+        <Button variant="default" radius="sm" onClick={() => setStrategyOpened(true)}>
+          优化策略
+        </Button>
       </div>
-
-      {capabilityError ? (
-        <div className="testbench-error-block prompt-optimization-error">
-          <span>{capabilityError}</span>
-        </div>
-      ) : null}
 
       <Tabs
         value={activeTab}
@@ -370,18 +685,22 @@ export function QuickOptimizationMode({
             onPdfSelect={handlePdfSelect}
             onPdfRemove={handlePdfRemove}
             requiredReports={requiredReports}
-            targetOptions={targetOptions}
-            selectedTargetCode={selectedTargetCode}
-            onSelectedTargetCodeChange={setSelectedTargetCode}
-            targetName={targetName}
-            onTargetNameChange={setTargetName}
+            indicatorCatalog={indicatorCatalog}
+            selectionSummary={selectionSummary}
+            onOpenTargetPicker={() => setTargetPickerOpened(true)}
             maxIterations={maxIterations}
             onMaxIterationsChange={setMaxIterations}
+            targetScoreThreshold={targetScoreThreshold}
+            onTargetScoreThresholdChange={setTargetScoreThreshold}
+            selectedIndicatorCount={selectedTargets.length}
             selectedRowCount={selectedTargetRows.length}
             totalRowCount={comparisonRows.length}
-            preselectedCodes={preselectedCodes}
+            baselineSummary={baselineSummary}
+            onOpenPromptAssetLibrary={onOpenPromptAssetLibrary}
+            strategy={strategy}
             canOptimize={canOptimize}
             isOptimizing={isOptimizing}
+            progressState={optimizationProgress}
             onStartOptimization={handleStartOptimization}
             error={error}
           />
@@ -390,6 +709,7 @@ export function QuickOptimizationMode({
         <Tabs.Panel value="history" pt="md">
           <OptimizationHistoryPanel
             runs={runs}
+            onClearHistory={handleClearHistory}
             onSelectRun={handleSelectRun}
           />
         </Tabs.Panel>
@@ -399,9 +719,56 @@ export function QuickOptimizationMode({
             run={currentRun}
             onApply={handleApplyCandidate}
             onExport={handleExportCurrent}
+            onSendToPromptIteration={(candidateId) => {
+              const candidate = (currentRun?.candidates || []).find((item) => item.id === candidateId)
+                || currentRun?.candidates?.[0]
+                || null;
+              const assetEntry = promptAssetEntries.find((entry) => entry.asset.id === currentRun?.assetId) || null;
+              const latestVersion = assetEntry?.versions?.find((item) => item.id === currentRun?.appliedVersionId)
+                || assetEntry?.latestVersion
+                || null;
+
+              onSendToPromptIteration?.(buildPromptIterationSeed({
+                assetId: currentRun?.assetId,
+                versionId: currentRun?.appliedVersionId || latestVersion?.id || '',
+                indicatorCode: currentRun?.indicatorCode,
+                indicatorName: currentRun?.targetName || currentRun?.indicatorName,
+                systemPrompt: latestVersion?.systemPrompt || '',
+                userPrompt: candidate?.promptText || currentRun?.baselinePromptText || ''
+              }));
+            }}
           />
         </Tabs.Panel>
       </Tabs>
+
+      <OptimizationStrategyDrawer
+        opened={strategyOpened}
+        onClose={() => setStrategyOpened(false)}
+        strategy={strategy}
+        onStrategyChange={setStrategy}
+        onReset={() => setStrategy(normalizePromptOptimizationStrategy(DEFAULT_PROMPT_OPTIMIZATION_STRATEGY))}
+        onSave={async () => {
+          const normalized = normalizePromptOptimizationStrategy(strategy);
+          setStrategy(normalized);
+          await savePromptOptimizationStrategyEntry(normalized);
+          setStrategyOpened(false);
+        }}
+      />
+
+      <OptimizationTargetPickerModal
+        opened={targetPickerOpened}
+        onClose={() => setTargetPickerOpened(false)}
+        comparisonRows={comparisonRows}
+        defaultMinSimilarity={0}
+        defaultMaxSimilarity={100}
+        initialSelectedCodes={selectedTargetCodes}
+        title="调整要自动优化的指标"
+        confirmLabel="确认指标"
+        onConfirm={(codes) => {
+          setSelectedTargetCodes(codes);
+          setTargetPickerOpened(false);
+        }}
+      />
     </section>
   );
 }

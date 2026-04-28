@@ -1,7 +1,15 @@
-import { Drawer } from '@mantine/core';
+import { Drawer, Stack, Text } from '@mantine/core';
 import { ModelPresetManager } from './modelPresets/ModelPresetManager.jsx';
+import { PagePresetSelect } from './modelPresets/PagePresetSelect.jsx';
 
-export function LLMSettingsDrawer({ opened, onClose, presets, onChangePresets }) {
+export function LLMSettingsDrawer({
+  opened,
+  onClose,
+  presets,
+  globalDefaultPresetId,
+  onChangeGlobalDefaultPresetId,
+  onChangePresets
+}) {
   return (
     <Drawer
       opened={opened}
@@ -11,7 +19,23 @@ export function LLMSettingsDrawer({ opened, onClose, presets, onChangePresets })
       size="xl"
       padding="lg"
     >
-      <ModelPresetManager presets={presets} onChangePresets={onChangePresets} />
+      <Stack gap="md">
+        <div className="preset-global-default-panel">
+          <Text size="sm" fw={700}>全局默认模型</Text>
+          <Text size="xs" c="dimmed" mb="sm">
+            页面没有单独设置模型时，默认跟随这里。
+          </Text>
+          <PagePresetSelect
+            label="全局默认"
+            presets={presets}
+            value={globalDefaultPresetId}
+            onChange={onChangeGlobalDefaultPresetId}
+            requiredCapabilities={{}}
+          />
+        </div>
+
+        <ModelPresetManager presets={presets} onChangePresets={onChangePresets} />
+      </Stack>
     </Drawer>
   );
 }

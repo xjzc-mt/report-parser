@@ -15,6 +15,8 @@ export const VENDOR_KEYS = {
 
 export const MODEL_PRESET_STORAGE_KEY = 'llm_lab_model_presets';
 export const PAGE_MODEL_SELECTIONS_STORAGE_KEY = 'llm_lab_page_model_selections';
+export const GLOBAL_MODEL_SELECTION_STORAGE_KEY = 'llm_lab_global_model_selection';
+export const PLATFORM_DEFAULT_PRESET_ID = 'preset_platform_default';
 
 export const MODEL_PAGE_KEYS = {
   PROMPT_ITERATION: 'prompt-iteration',

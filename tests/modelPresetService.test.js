@@ -60,7 +60,7 @@ test('mergePresetCollections 会按 id 去重并保留前者优先级', () => {
   ]);
 });
 
-test('initializeModelPresetSystem 在没有新预设库时会清理旧 key，再生成 env 默认预设和页面默认选择', () => {
+test('initializeModelPresetSystem 在没有新预设库时会清理旧 key，并生成 env 默认预设和全局默认选择', () => {
   localStorage.setItem('intelliextract_llm1', JSON.stringify({
     apiUrl: 'https://generativelanguage.googleapis.com/v1beta',
     apiKey: 'legacy-key',
@@ -76,6 +76,57 @@ test('initializeModelPresetSystem 在没有新预设库时会清理旧 key，再
 
   assert.equal(state.presets.length, 1);
   assert.equal(state.presets[0].name, '默认 OpenAI');
-  assert.equal(state.selections['prompt-iteration'], 'preset_openai_default');
+  assert.equal(state.globalDefaultPresetId, 'preset_openai_default');
+  assert.deepEqual(state.selections, {});
   assert.equal(localStorage.getItem('intelliextract_llm1'), null);
+});
+
+test('initializeModelPresetSystem 会刷新旧的 env 只读预设，并保留手动预设', () => {
+  localStorage.setItem('llm_lab_model_presets', JSON.stringify([
+    {
+      id: 'preset_platform_default',
+      name: '平台默认模型',
+      transportType: 'gemini_native',
+      vendorKey: 'gemini',
+      baseUrl: 'https://old.example.com',
+      modelName: 'old-model',
+      credentialMode: 'env',
+      credentialRef: 'VITE_PLATFORM_DEFAULT_API_KEY',
+      manualApiKey: '',
+      capabilities: { supportsPdfUpload: true, supportsJsonMode: true },
+      status: 'active',
+      isReadonly: true,
+      isDefault: true
+    },
+    {
+      id: 'preset_manual_custom',
+      name: '手动模型',
+      transportType: 'openai_compatible',
+      vendorKey: 'custom',
+      baseUrl: 'https://manual.example.com/v1',
+      modelName: 'manual-model',
+      credentialMode: 'manual',
+      credentialRef: '',
+      manualApiKey: 'manual-key',
+      capabilities: { supportsPdfUpload: false, supportsJsonMode: true },
+      status: 'active',
+      isReadonly: false,
+      isDefault: false
+    }
+  ]));
+  localStorage.setItem('llm_lab_global_model_selection', 'preset_platform_default');
+
+  const state = initializeModelPresetSystem({
+    VITE_PLATFORM_DEFAULT_VENDOR: 'openai',
+    VITE_PLATFORM_DEFAULT_MODEL: 'gpt-4.1',
+    VITE_PLATFORM_DEFAULT_BASE_URL: 'https://api.openai.com/v1',
+    VITE_PLATFORM_DEFAULT_API_KEY: 'platform-key'
+  });
+
+  assert.equal(state.presets.length, 2);
+  assert.equal(state.presets[0].id, 'preset_platform_default');
+  assert.equal(state.presets[0].vendorKey, 'openai');
+  assert.equal(state.presets[0].modelName, 'gpt-4.1');
+  assert.equal(state.presets[1].id, 'preset_manual_custom');
+  assert.equal(state.globalDefaultPresetId, 'preset_platform_default');
 });
