@@ -617,8 +617,6 @@ function joinTestSetWithLlm1(testSetRows, llm1Results, fieldMappings = null) {
     });
   }
 
-  console.log(`[joinTestSetWithLlm1] 追加了 ${hallucinationCount} 条幻觉行`);
-
   // ── 数据清洗：分离有效和无效数据 ──────────────────────────────────────────
   const validRows = [];
   const invalidRows = [];
@@ -634,7 +632,6 @@ function joinTestSetWithLlm1(testSetRows, llm1Results, fieldMappings = null) {
     }
   }
 
-  console.log(`[数据清洗] 有效: ${validRows.length}, 无效: ${invalidRows.length}`);
   return { validRows, invalidRows, matchCount, effectiveMappings };
 }
 

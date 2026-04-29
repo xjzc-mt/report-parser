@@ -5,7 +5,7 @@ export async function exportResultsToExcel(results, extractionStats) {
   const exportData = buildExportData(results);
 
   if (exportData.length === 0) {
-    window.alert('No valid results to export.');
+    window.alert('没有可导出的有效结果。');
     return;
   }
 
@@ -21,41 +21,41 @@ export async function exportResultsToExcel(results, extractionStats) {
   }
 
   const summaryData = [
-    ['Extraction Summary', ''],
+    ['提取摘要', ''],
     ['', ''],
-    ['Model', extractionStats.model || 'N/A'],
-    ['Selected Types', extractionStats.selectedTypes || 'N/A'],
-    ['PDF Files', extractionStats.totalFiles || 0],
-    ['Start Time', extractionStats.startTime || 'N/A'],
-    ['End Time', extractionStats.endTime || 'N/A'],
-    ['Total Duration', extractionStats.duration || 'N/A'],
+    ['模型', extractionStats.model || 'N/A'],
+    ['选择类型', extractionStats.selectedTypes || 'N/A'],
+    ['PDF 文件数', extractionStats.totalFiles || 0],
+    ['开始时间', extractionStats.startTime || 'N/A'],
+    ['结束时间', extractionStats.endTime || 'N/A'],
+    ['总耗时', extractionStats.duration || 'N/A'],
     ['', ''],
-    ['Total Indicators (Excel)', extractionStats.totalInputIndicators || 0],
-    ['Total Indicators (Processed)', extractionStats.totalIndicators || 0],
-    ['  - Text Type', extractionStats.textCount || 0],
-    ['  - Numeric Type', extractionStats.numericCount || 0],
-    ['  - Intensity Type', extractionStats.intensityCount || 0],
-    ['  - Currency Type', extractionStats.currencyCount || 0],
-    ['Extracted (Found)', exportData.length],
-    ['Not Found', (extractionStats.totalIndicators || 0) - exportData.length],
+    ['Excel 指标总数', extractionStats.totalInputIndicators || 0],
+    ['已处理指标数', extractionStats.totalIndicators || 0],
+    ['  - 文字型', extractionStats.textCount || 0],
+    ['  - 数值型', extractionStats.numericCount || 0],
+    ['  - 强度型', extractionStats.intensityCount || 0],
+    ['  - 货币型', extractionStats.currencyCount || 0],
+    ['已提取', exportData.length],
+    ['未找到', (extractionStats.totalIndicators || 0) - exportData.length],
     ['', ''],
-    ['Total Batches', extractionStats.totalBatches || 0],
-    ['  - Text Batches', extractionStats.textBatches || 0],
-    ['  - Numeric Batches', extractionStats.numericBatches || 0],
-    ['  - Intensity Batches', extractionStats.intensityBatches || 0],
-    ['  - Currency Batches', extractionStats.currencyBatches || 0],
+    ['总批次数', extractionStats.totalBatches || 0],
+    ['  - 文字型批次', extractionStats.textBatches || 0],
+    ['  - 数值型批次', extractionStats.numericBatches || 0],
+    ['  - 强度型批次', extractionStats.intensityBatches || 0],
+    ['  - 货币型批次', extractionStats.currencyBatches || 0],
     ['', ''],
-    ['Input Tokens', extractionStats.totalInputTokens || 0],
-    ['Output Tokens', extractionStats.totalOutputTokens || 0],
-    ['Total Tokens', (extractionStats.totalInputTokens || 0) + (extractionStats.totalOutputTokens || 0)],
-    ['Estimated Cost (USD)', `$${(extractionStats.totalCost || 0).toFixed(4)}`]
+    ['输入 Token', extractionStats.totalInputTokens || 0],
+    ['输出 Token', extractionStats.totalOutputTokens || 0],
+    ['总 Token', (extractionStats.totalInputTokens || 0) + (extractionStats.totalOutputTokens || 0)],
+    ['预估成本（USD）', `$${(extractionStats.totalCost || 0).toFixed(4)}`]
   ];
 
   const summaryWorksheet = XLSX.utils.aoa_to_sheet(summaryData);
   summaryWorksheet['!cols'] = [{ wch: 28 }, { wch: 35 }];
 
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Results');
-  XLSX.utils.book_append_sheet(workbook, summaryWorksheet, 'Summary');
+  XLSX.utils.book_append_sheet(workbook, worksheet, '结果');
+  XLSX.utils.book_append_sheet(workbook, summaryWorksheet, '摘要');
   XLSX.writeFile(workbook, `extraction_results_${new Date().toISOString().split('T')[0]}.xlsx`);
 }

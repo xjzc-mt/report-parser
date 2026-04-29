@@ -35,8 +35,8 @@ function saveGlobalSettings(settings) {
   try { localStorage.setItem(LS_SETTINGS, JSON.stringify(normalizeGlobalSettings(settings))); } catch (_) { /* ignore */ }
 }
 
-const TestWorkbenchTab = lazy(() => import('./components/TestWorkbenchTab.jsx').then((module) => ({
-  default: module.TestWorkbenchTab
+const TestSetWorkbench = lazy(() => import('./components/TestSetWorkbench.jsx').then((module) => ({
+  default: module.TestSetWorkbench
 })));
 
 function createInitialProgress() {
@@ -188,7 +188,7 @@ export default function App() {
     const invalidFile = nextFiles.find((file) => !validatePdfFile(file));
 
     if (invalidFile) {
-      window.alert(`Please upload valid PDF files only. Invalid file: ${invalidFile.name}`);
+      window.alert(`请只上传有效的 PDF 文件。无效文件：${invalidFile.name}`);
       return;
     }
 
@@ -215,7 +215,7 @@ export default function App() {
 
   const handleRequirementsSelect = (file) => {
     if (!validateRequirementsFile(file)) {
-      window.alert('Please upload a valid Excel or CSV file.');
+      window.alert('请上传有效的 Excel 或 CSV 文件。');
       return;
     }
     setRequirementsFile(file);
@@ -438,11 +438,11 @@ export default function App() {
         <MethodologyTab />
       ) : null}
 
-      {/* TestWorkbenchTab 首次访问后持续挂载，防止切换 tab 时运行状态丢失 */}
+      {/* 测试集工作台首次访问后持续挂载，防止切换 tab 时运行状态丢失 */}
       {hasVisitedTestbench && (
         <div style={{ display: activeTab === 'test-workbench' ? 'block' : 'none' }}>
           <Suspense fallback={<section className="glass-panel main-panel"><p className="section-caption">正在加载测试集工作台...</p></section>}>
-            <TestWorkbenchTab
+            <TestSetWorkbench
               globalSettings={settings}
               modelPresets={modelPresets}
               globalDefaultPresetId={globalDefaultPresetId}

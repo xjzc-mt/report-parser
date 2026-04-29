@@ -49,7 +49,7 @@ export function ResultsPanel({ results, displayedResults, filterOnlyFound, onTog
         <div>
           <h2 className="section-title">
             <IconSparkles size={20} stroke={1.8} />
-            <span>Extracted Data</span>
+            <span>提取结果</span>
           </h2>
           <p className="section-caption">
             {displayedResults.length} / {results.length} 行正在显示
@@ -58,7 +58,7 @@ export function ResultsPanel({ results, displayedResults, filterOnlyFound, onTog
         <div className="results-actions">
           <Checkbox
             className="filter-toggle filter-toggle-mantine"
-            label="Show only results found"
+            label="只看已找到结果"
             checked={filterOnlyFound}
             onChange={(event) => onToggleFilter(event.currentTarget.checked)}
           />
@@ -70,34 +70,34 @@ export function ResultsPanel({ results, displayedResults, filterOnlyFound, onTog
             onClick={onExport}
             leftSection={<IconDownload size={16} />}
           >
-            Export to Excel
+            导出 Excel
           </Button>
         </div>
       </div>
 
       <div className="summary-strip">
         <div className="summary-chip">
-          <strong>Processed</strong>
+          <strong>已处理</strong>
           <span>{totalCount}</span>
         </div>
         <div className="summary-chip">
-          <strong>Found</strong>
+          <strong>已找到</strong>
           <span>{foundCount}</span>
         </div>
         <div className="summary-chip">
-          <strong>Hit Rate</strong>
+          <strong>命中率</strong>
           <span>{hitRate}%</span>
         </div>
         <div className="summary-chip">
-          <strong>Batches</strong>
+          <strong>批次数</strong>
           <span>{stats.totalBatches || 0}</span>
         </div>
         <div className="summary-chip">
-          <strong>Duration</strong>
+          <strong>耗时</strong>
           <span>{stats.duration || 'N/A'}</span>
         </div>
         <div className="summary-chip">
-          <strong>Cost</strong>
+          <strong>成本</strong>
           <span>${(stats.totalCost || 0).toFixed(4)}</span>
         </div>
       </div>
@@ -105,7 +105,7 @@ export function ResultsPanel({ results, displayedResults, filterOnlyFound, onTog
       {displayedResults.length === 0 ? (
         <div className="results-empty">
           <h3 className="results-empty-title">当前筛选下没有可显示的数据</h3>
-          <p className="results-empty-text">可以关闭“Show only results found”来查看全部处理结果。</p>
+          <p className="results-empty-text">可以关闭“只看已找到结果”来查看全部处理结果。</p>
         </div>
       ) : (
         <div className="table-container">

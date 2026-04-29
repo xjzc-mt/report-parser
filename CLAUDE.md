@@ -1,107 +1,60 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
 本文件为 Claude Code 在此代码库中工作时提供指引。
 
 ## 常用命令
 
 ```bash
-npm run dev       # 启动 Vite 开发服务器，地址 http://localhost:5173
+npm run dev       # 启动 Vite 开发服务器
+npm test          # 运行 Node 原生测试
 npm run build     # 生产环境构建
 npm run preview   # 预览生产构建结果
 ```
 
-暂无测试或代码检查命令。
+提交或交付前至少运行 `npm test` 和 `npm run build`。
 
-环境配置：将 `.env.example` 复制为 `.env`，优先填写 `VITE_PLATFORM_DEFAULT_*` 这一组平台默认模型配置。旧的 `VITE_GEMINI_API_KEY` 仍兼容。修改 `.env` 后需重启 `npm run dev`。
+## 项目定位
 
-## 架构概览
+LLM Lab 是一个纯浏览器端 React 应用，无后端服务。目标是建设通用 LLM 工程化实验平台，当前围绕 PDF/Excel 文件解析、Prompt 快速迭代、模型结果验收、Prompt 自动优化、线上验证和数据预处理形成闭环。
 
-**IntelliExtract** 是一个纯浏览器端 React 应用（无后端），用于从 PDF 报告中 AI 驱动地提取 ESG 指标数据。所有文件处理均在客户端完成。
+## 主要入口
 
-### 四个功能标签页
+- `src/App.jsx`：顶层导航、全局模型设置、线上验证状态。
+- `src/components/TestSetWorkbench.jsx`：测试集工作台容器，负责三级页面切换、Prompt 资产库和跨页面上下文传递。
+- `src/components/FullFlowMode.jsx`：Prompt 快速迭代。
+- `src/components/QuickValidationMode.jsx`：模型结果验收。
+- `src/components/QuickOptimizationMode.jsx`：Prompt 自动优化。
+- `src/components/OnlineValidationWorkbench.jsx` / `src/components/ExtractorTab.jsx`：线上验证工作台。
+- `src/components/DataPreprocessingWorkbench.jsx`：数据预处理工作台。
+- `src/components/modelPresets/`：模型预设管理。
+- `src/components/promptAssets/`：Prompt 资产库。
+- `src/services/`：LLM 调用、文件解析、导出、持久化和业务流程。
+- `src/utils/`：纯计算、状态归一化和视图模型。
+- `tests/`：单元测试。
 
-1. **提取器（Extractor）** — 上传 PDF + Excel 需求文件 → AI 提取 700+ ESG 指标 → 导出到 Excel
-2. **压缩器（Compressor）** — 基于 `pdf-lib` 的浏览器内 PDF 压缩
-3. **测试工作台（TestWorkbench）** — 双 LLM 对比测试：LLM 1 提取 + LLM 2 优化 Prompt，输出对比报告
-4. **方法论（Methodology）** — 静态说明文档
+## 模型配置
 
-### 提取数据流
+优先使用 `.env` 中的 `VITE_PLATFORM_DEFAULT_*` 配置平台默认模型：
 
-```
-PDF 文件 + 需求 Excel
-  → fileParsers.js       （parsePDF 通过 pdf.js CDN，parseExcel 通过 xlsx，fileToBase64）
-  → extraction.js 工具函数  （normalizeRequirementRow，按指标类型 splitRequirementsIntoBatches）
-  → extractionService.js （worker 池，并发批处理，runExtractionJob）
-  → llmClient.js         （callLLMWithRetry，buildExtractionSystemPrompt，成本估算）
-  → exportService.js     （exportResultsToExcel，含汇总统计）
-```
-
-**Gemini vs 其他 LLM：** Gemini 接收原始 PDF 二进制（原生提取）；其他 LLM 端点接收提取后的文本。
-
-### 关键文件
-
-| 路径 | 职责 |
-|------|------|
-| `src/App.jsx` | 全局状态管理、标签页路由、提取流程编排 |
-| `src/services/extractionService.js` | Worker 池、批次并发、`runExtractionJob()` |
-| `src/services/llmClient.js` | API 调用、重试逻辑、系统提示词构建、成本追踪 |
-| `src/services/fileParsers.js` | PDF 文本提取、Excel 解析、base64 转换 |
-| `src/services/exportService.js` | Excel 导出及汇总统计 |
-| `src/services/testBenchService.js` | 测试工作台主流程：LLM 1 提取 + LLM 2 Prompt 优化、结果对比导出 |
-| `src/services/pdfPageExtractor.js` | 按页码范围提取 PDF 子集（`parsePdfNumbers`、`extractPdfPages`、`uint8ArrayToBase64`） |
-| `src/services/pdfCompressorService.js` | 基于 `pdf-lib` 的浏览器内 PDF 压缩逻辑（压缩器标签页使用） |
-| `src/utils/extraction.js` | 数据规范化、批次拆分、结果映射 |
-| `src/constants/extraction.js` | `DEFAULT_SETTINGS`、`MODEL_OPTIONS`、`PRICING`、`ESG_EXPERT_SYSTEM_PROMPT` |
-| `src/constants/testBench.js` | `DEFAULT_LLM1/LLM2_SETTINGS`、`VALUE_TYPE_EN_TO_ZH`、`PROMPT_OPTIMIZER_SYSTEM_PROMPT` |
-
-### 测试工作台数据流
-
-```
-PDF 文件列表 + 测试集 Excel（含标准答案和 pdf_numbers 页码）
-  → testBenchService.js
-      阶段一（runExtractionPhase）：
-        1. 按 report_name + pdf_numbers 分组
-        2. pdfPageExtractor.js（extractPdfPages 提取指定页为子 PDF）
-        3. LLM 1（callLLMWithRetry 提取 ESG 指标，固定5秒重试，最多3次）
-        4. joinTestSetWithLlm1（右关联 + calculateSimilarity 关键词相似度）
-        → 返回 comparisonRows（含 similarity 字段），自动下载关联对比文件
-      [用户手动确认后]
-      阶段二（runOptimizationPhase）：
-        5. 按 indicator_code 跨报告分组
-        6. 为每份报告提取页面文本上下文
-        7. LLM 2（PROMPT_OPTIMIZER_SYSTEM_PROMPT，跨报告优化，输出 improved_prompt）
-  → exportComparisonRows / exportFinalResults（导出两份 Excel）
+```bash
+VITE_PLATFORM_DEFAULT_VENDOR=gemini
+VITE_PLATFORM_DEFAULT_TRANSPORT=gemini_native
+VITE_PLATFORM_DEFAULT_BASE_URL=https://generativelanguage.googleapis.com/v1beta
+VITE_PLATFORM_DEFAULT_MODEL=gemini-2.5-pro
+VITE_PLATFORM_DEFAULT_API_KEY=
+VITE_PLATFORM_DEFAULT_PRESET_NAME=平台默认模型
 ```
 
-**支持恢复运行**：任意阶段失败后抛出携带 `resumeState` 的 Error，UI 层存储并在用户点击"继续运行"时传回服务函数。
+也支持 `VITE_DEFAULT_GEMINI_*`、`VITE_DEFAULT_OPENAI_*`、`VITE_DEFAULT_ANTHROPIC_*`、`VITE_DEFAULT_ONEAPI_*`、`VITE_DEFAULT_GLM_*` 生成只读厂商默认预设。旧的 `VITE_GEMINI_API_KEY` 仍兼容，但后续不建议新增依赖。
 
-**独立优化入口**：用户可上传已有的关联对比文件（`parseComparisonFile`），直接跳过阶段一运行 LLM 2 优化。
+## 持久化与安全
 
-**测试集 Excel 必须包含列 (Mandatory Columns)：**
-*   `report_name`: PDF 文件名（不含扩展名），用于定位 PDF。
-*   `pdf_numbers`: 指标所在页码（如 `12` 或 `12,13`），用于截取文本。
-*   `indicator_code`: 指标唯一编码。
-*   `indicator_name`: 指标名称。
-*   `data_year`: 数据年份。
-*   `text_value`: **标准答案**（文字型，用于相似度对比）。
-*   `value_type_1` (或 `value_type`): 指标类型 (文字型/数值型/强度型/货币型)。
-*   `prompt`: **提取提示词** (若上传了定义文件，则定义文件中的 prompt 优先；两者皆无则报错)。
+- 本项目主要使用 `localStorage` 和 `IndexedDB` 保存页面选择、模型预设、上传文件缓存、Prompt 资产、Prompt 优化历史等数据。
+- `public/conversion.xlsx` 和 `public/synonyms.xlsx` 是初始化配置，不能删除。
+- 不要提交真实 API Key、真实报告 PDF、导出结果或包含敏感信息的数据文件。
 
-**指标定义文件支持列 (Supported Columns)：**
-*   `indicator_code`: **必填**，必须与测试集一致。
-*   `prompt`: **最核心字段**。若仅有此列与 `indicator_code`，系统将直接使用其作为最高优先级的提取指令。
-*   `definition` / `guidance`: 可选字段。仅在 `prompt` 缺失时，系统会组合这两列作为备选提取指令。
+## 开发约束
 
-### 指标值类型
-
-四种 ESG 指标类型驱动批次拆分和独立系统提示词：**文本型（text）**、**数值型（numeric）**、**货币型（currency）**、**强度型（intensity）**。
-
-### 技术栈
-
-- React 19 + Vite 5 + Mantine 8（UI 框架）
-- `xlsx` — Excel 读写
-- `pdf-lib` + `pako` — PDF 压缩
-- `pdf.js` 3.11.174 — PDF 文本提取（通过 `index.html` 中的 CDN 加载）
-- 默认模型：Gemini 2.5 Pro / Gemini 3 Pro Preview；支持任何 OpenAI 兼容端点
+- 新增用户可见文案统一使用中文。
+- 页面组件只做编排和交互；复杂业务流程放到 `services/`；纯计算、映射和视图模型放到 `utils/`。
+- 涉及 Prompt 自动优化、模型预设、导出结构或相似度逻辑时，需要同步检查相关测试和跨组件数据流。

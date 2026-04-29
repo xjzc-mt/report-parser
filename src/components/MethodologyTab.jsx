@@ -28,7 +28,7 @@ export function MethodologyTab() {
           <IconBooks size={20} stroke={1.8} />
           <span>说明文档</span>
         </h2>
-        <p className="section-caption">将说明整理为独立文档，便于边看边配置。</p>
+        <p className="section-caption">汇总平台结构、输入输出、模型接入和安全边界。</p>
       </div>
 
       <div className="methodology-content">

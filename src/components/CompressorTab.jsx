@@ -103,7 +103,7 @@ export function CompressorTab() {
     if (!file) return;
 
     if (!(file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf'))) {
-      window.alert(`Please upload a valid PDF file. Invalid file: ${file.name}`);
+      window.alert(`请上传有效的 PDF 文件。无效文件：${file.name}`);
       return;
     }
 
@@ -121,7 +121,7 @@ export function CompressorTab() {
     lastPhaseRef.current = '';
     setProgress({
       visible: true,
-      status: 'Starting PDF compression...',
+      status: '开始压缩 PDF...',
       percentage: 0,
       logs: [],
       isLoading: true
@@ -185,7 +185,7 @@ export function CompressorTab() {
     } catch (error) {
       console.error(error);
       appendProgress({
-        message: `Compression failed: ${error.message}`,
+        message: `压缩失败：${error.message}`,
         percentage: 100,
         timestamp: new Date().toLocaleTimeString()
       });
@@ -207,10 +207,10 @@ export function CompressorTab() {
       <UploadCard
         icon={<IconFileTypePdf size={26} stroke={1.8} />}
         tag="PDF"
-        title="Upload PDF"
-        hint="Upload one PDF to compress"
+        title="上传 PDF"
+        hint="上传一份需要压缩的 PDF"
         acceptHint="当前仅支持单文件压缩"
-        buttonLabel="Browse PDF"
+        buttonLabel="选择 PDF"
         accept="application/pdf"
         file={pdfFile}
         onFileSelect={handlePdfSelect}
@@ -330,7 +330,7 @@ export function CompressorTab() {
         </Button>
       </div>
 
-      <ProgressPanel progress={progress} eyebrow="Compression" title="压缩进度" maxLogs={3} />
+      <ProgressPanel progress={progress} eyebrow="PDF 压缩" title="压缩进度" maxLogs={3} />
 
       {result && summary ? (
         <section className="panel-block compressor-result-card">

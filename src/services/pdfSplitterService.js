@@ -56,7 +56,7 @@ function extractJsonPayload(text) {
     if (start >= 0 && end > start) {
       return JSON.parse(cleaned.slice(start, end + 1));
     }
-    throw new Error('No valid JSON object found in model response.');
+    throw new Error('模型回复中没有找到合法 JSON 对象。');
   }
 }
 
@@ -179,13 +179,13 @@ async function locateSinglePdfPages({ pdfFile, items, settings, reportProgress }
 
   if (isGemini) {
     pdfBase64 = await fileToBase64(pdfFile);
-    reportProgress('PDF loaded for Gemini.', 20);
+    reportProgress('已按 Gemini 多模态方式载入 PDF。', 20);
   } else {
     const pages = await parsePDF(pdfFile, (message, percentage) => {
       reportProgress(message, Math.min(20, percentage));
     });
     documentText = pages.map((page) => `[Page ${page.pageNumber}]\n${page.text}`).join('\n\n');
-    reportProgress('PDF text parsed locally.', 20);
+    reportProgress('已在本地解析 PDF 文本。', 20);
   }
 
   const itemsBlock = items
@@ -196,7 +196,7 @@ async function locateSinglePdfPages({ pdfFile, items, settings, reportProgress }
     ? `Items:\n${itemsBlock}\n\nPlease locate the most relevant physical PDF page number(s) for each item in the attached PDF.`
     : `Document:\n<document>\n${documentText}\n</document>\n\nItems:\n${itemsBlock}\n\nPlease locate the most relevant [Page X] marker(s) for each item.`;
 
-  reportProgress('Calling model...', 36);
+  reportProgress('正在调用模型...', 36);
 
   const response = await callLLMWithRetry({
     sysPrompt: PAGE_LOCATOR_SYSTEM_PROMPT,
@@ -208,7 +208,7 @@ async function locateSinglePdfPages({ pdfFile, items, settings, reportProgress }
     pdfBase64
   }, (message) => reportProgress(message, -1));
 
-  reportProgress('Parsing model response...', 82);
+  reportProgress('正在解析模型回复...', 82);
 
   const parsedData = extractJsonPayload(response.text);
   const resultsArray = getResultsArray(parsedData);
@@ -241,11 +241,11 @@ export async function locatePdfPages({ pdfFile, pdfFiles, items, settings, onPro
   const normalizedFiles = normalizePdfFiles(pdfFiles || pdfFile);
 
   if (normalizedFiles.length === 0) {
-    throw new Error('Please upload at least one PDF file.');
+    throw new Error('请至少上传一份 PDF 文件。');
   }
 
   if (normalizedItems.length === 0) {
-    throw new Error('Please enter at least one valid name and description.');
+    throw new Error('请至少填写一组有效的名称和描述。');
   }
 
   const zip = new JSZip();
@@ -270,7 +270,7 @@ export async function locatePdfPages({ pdfFile, pdfFiles, items, settings, onPro
       reportProgress(`${filePrefix}: ${message}`, globalPercentage);
     };
 
-    reportFileProgress('Preparing PDF...', 5);
+    reportFileProgress('正在准备 PDF...', 5);
 
     let located;
     try {
@@ -284,7 +284,7 @@ export async function locatePdfPages({ pdfFile, pdfFiles, items, settings, onPro
       throw new Error(`${currentFile.name}: ${error.message}`);
     }
 
-    reportFileProgress('Generating split PDFs...', 88);
+    reportFileProgress('正在生成分割 PDF...', 88);
 
     const pdfBytes = await currentFile.arrayBuffer();
     const sourcePdf = await PDFDocument.load(pdfBytes);
@@ -324,7 +324,7 @@ export async function locatePdfPages({ pdfFile, pdfFiles, items, settings, onPro
       });
 
       reportFileProgress(
-        `Splitting ${itemIndex + 1}/${located.results.length} items...`,
+        `正在分割第 ${itemIndex + 1}/${located.results.length} 条...`,
         88 + Math.round(((itemIndex + 1) / located.results.length) * 10)
       );
     }
@@ -348,7 +348,7 @@ export async function locatePdfPages({ pdfFile, pdfFiles, items, settings, onPro
 
   let zipBlob = null;
   if (totalGeneratedFiles > 0) {
-    reportProgress('Packaging ZIP...', 99);
+    reportProgress('正在打包 ZIP...', 99);
     zipBlob = await zip.generateAsync({
       type: 'blob',
       compression: 'DEFLATE',
@@ -358,7 +358,7 @@ export async function locatePdfPages({ pdfFile, pdfFiles, items, settings, onPro
 
   const endTime = new Date();
   const durationMs = endTime - startTime;
-  reportProgress(totalGeneratedFiles > 0 ? 'Done. ZIP is ready.' : 'Done. No matching pages were split.', 100);
+  reportProgress(totalGeneratedFiles > 0 ? '完成，ZIP 已生成。' : '完成，没有匹配到可分割页码。', 100);
 
   return {
     fileResults,

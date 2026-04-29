@@ -19,7 +19,7 @@ import { PagePresetQuickSwitch } from './modelPresets/PagePresetQuickSwitch.jsx'
 function formatPdfInfo(file) {
   if (Array.isArray(file)) {
     const totalSizeMb = file.reduce((sum, item) => sum + item.size, 0) / 1024 / 1024;
-    return `${file.length} PDFs selected (${totalSizeMb.toFixed(2)} MB)`;
+    return `已选择 ${file.length} 个 PDF（${totalSizeMb.toFixed(2)} MB）`;
   }
   return `${file.name} (${(file.size / 1024 / 1024).toFixed(2)} MB)`;
 }
@@ -128,7 +128,7 @@ export function ExtractorTab({
           <div className="settings-grid workbench-grid">
             <div className="input-group">
               <Select
-                label="Batch Size"
+                label="批次大小"
                 value={String(batchSize)}
                 onChange={(value) => value && onChangeSetting('batchSize', Number(value))}
                 data={toSelectData(BATCH_SIZE_OPTIONS)}
@@ -139,7 +139,7 @@ export function ExtractorTab({
 
             <div className="input-group">
               <Select
-                label="Max Concurrency"
+                label="最大并发数"
                 value={String(maxConcurrency)}
                 onChange={(value) => value && onChangeSetting('maxConcurrency', Number(value))}
                 data={toSelectData(MAX_CONCURRENCY_OPTIONS)}
@@ -149,7 +149,7 @@ export function ExtractorTab({
             </div>
 
             <div className="input-group input-group-wide">
-              <label>Indicator Types To Process</label>
+              <label>处理的指标类型</label>
               <div className="checkbox-group">
                 {PROCESSABLE_VALUE_TYPES.map((type) => (
                   <IndicatorTypeCheckbox
@@ -176,10 +176,10 @@ export function ExtractorTab({
             <UploadCard
               icon={<IconFileTypePdf size={26} stroke={1.8} />}
               tag="PDF"
-              title="Upload PDFs"
-              hint="Upload one or more source reports to process sequentially"
+              title="上传 PDF"
+              hint="上传一份或多份源报告，系统会按顺序处理"
               acceptHint="支持多篇 PDF，系统会按顺序逐篇提取"
-              buttonLabel="Browse PDFs"
+              buttonLabel="选择 PDF"
               accept="application/pdf"
               file={pdfFiles}
               multiple
@@ -190,10 +190,10 @@ export function ExtractorTab({
             <UploadCard
               icon={<IconFileSpreadsheet size={26} stroke={1.8} />}
               tag="Excel / CSV"
-              title="Upload Requirements Excel"
-              hint="Contains: value_type, indicator_code, indicator_name, definition, guidance, prompt"
+              title="上传需求清单"
+              hint="包含 value_type、indicator_code、indicator_name、definition、guidance、prompt 等字段"
               acceptHint="支持 .xlsx / .xls / .csv"
-              buttonLabel="Browse Excel"
+              buttonLabel="选择 Excel"
               accept=".xlsx,.xls,.csv"
               file={requirementsFile}
               onFileSelect={onSelectRequirements}
@@ -204,7 +204,7 @@ export function ExtractorTab({
 
         <section className="action-card">
           <div className="action-copy">
-            <span className="eyebrow">Ready Check</span>
+            <span className="eyebrow">运行检查</span>
             <h3>{canStart ? '可以开始提取了' : '还差几步就能开始运行'}</h3>
             <div className="readiness-list">
               {readinessItems.map((item) => (
@@ -230,7 +230,7 @@ export function ExtractorTab({
             onClick={onStart}
             leftSection={<IconPlayerPlayFilled size={16} />}
           >
-            {isRunning ? 'Extraction Running...' : 'Start Extraction'}
+            {isRunning ? '提取运行中...' : '开始提取'}
           </Button>
         </section>
 

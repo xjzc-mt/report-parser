@@ -155,7 +155,7 @@ export function PdfSplitterTab({
 
     const invalidFile = nextFiles.find((file) => !(file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')));
     if (invalidFile) {
-      window.alert(`Please upload valid PDF files only. Invalid file: ${invalidFile.name}`);
+      window.alert(`请只上传有效的 PDF 文件。无效文件：${invalidFile.name}`);
       return;
     }
 
@@ -203,7 +203,7 @@ export function PdfSplitterTab({
 
   const handleRun = async () => {
     if (pdfFiles.length === 0) {
-      window.alert('Please upload at least one PDF file.');
+      window.alert('请至少上传一份 PDF 文件。');
       return;
     }
 
@@ -222,7 +222,7 @@ export function PdfSplitterTab({
     setResult(null);
     setProgress({
       visible: true,
-      status: 'Starting PDF split job...',
+      status: '开始 PDF 分割任务...',
       percentage: 0,
       logs: [],
       isLoading: true
@@ -372,11 +372,11 @@ export function PdfSplitterTab({
           onClick={handleRun}
           leftSection={<IconPlayerPlayFilled size={16} />}
         >
-          {isRunning ? 'Splitting...' : '开始批量分割'}
+          {isRunning ? '正在分割...' : '开始批量分割'}
         </Button>
       </div>
 
-      <ProgressPanel progress={progress} eyebrow="PDF Splitter" title="分割进度" maxLogs={5} />
+      <ProgressPanel progress={progress} eyebrow="PDF 切割" title="分割进度" maxLogs={5} />
 
       {result ? (
         <section className="panel-block splitter-result-panel">
@@ -389,23 +389,23 @@ export function PdfSplitterTab({
 
           <div className="summary-strip splitter-summary-strip splitter-summary-strong">
             <div className="summary-chip">
-              <strong>Files</strong>
+              <strong>文件数</strong>
               <span>{result.stats?.totalFiles || 0}</span>
             </div>
             <div className="summary-chip">
-              <strong>Items</strong>
+              <strong>条目数</strong>
               <span>{result.stats?.totalItems || 0}</span>
             </div>
             <div className="summary-chip">
-              <strong>Searches</strong>
+              <strong>检索数</strong>
               <span>{result.stats?.totalSearches || 0}</span>
             </div>
             <div className="summary-chip">
-              <strong>Found</strong>
+              <strong>命中数</strong>
               <span>{result.stats?.foundCount || 0}</span>
             </div>
             <div className="summary-chip">
-              <strong>PDFs</strong>
+              <strong>生成 PDF</strong>
               <span>{result.stats?.generatedFiles || 0}</span>
             </div>
             <div className="summary-chip">
@@ -413,11 +413,11 @@ export function PdfSplitterTab({
               <span>{formatBytes(result.zipSize)}</span>
             </div>
             <div className="summary-chip">
-              <strong>Pages</strong>
+              <strong>页数</strong>
               <span>{result.stats?.totalMatchedPages || 0}</span>
             </div>
             <div className="summary-chip">
-              <strong>Duration</strong>
+              <strong>耗时</strong>
               <span>{result.stats?.duration || '-'}</span>
             </div>
           </div>

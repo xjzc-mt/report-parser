@@ -38,8 +38,8 @@ async function processExtractionBatch({
   reportProgress
 }) {
   const normalizedBatchType = normalizeValueType(batchType);
-  const typeLabel = normalizedBatchType === '文字型' ? 'Text' : normalizedBatchType;
-  reportProgress(`Starting batch ${batchIndex + 1}/${totalBatches} (${typeLabel}, ${batch.length} indicators)...`);
+  const typeLabel = normalizedBatchType || batchType;
+  reportProgress(`开始批次 ${batchIndex + 1}/${totalBatches}（${typeLabel}，${batch.length} 个指标）...`);
 
   const sysPrompt = systemPrompts[normalizedBatchType];
   const requirementText = batch.map((requirement) => (
@@ -67,7 +67,7 @@ async function processExtractionBatch({
   }, reportProgress);
 
   const batchCost = estimateCost(modelName, result.usage.input_tokens, result.usage.output_tokens);
-  reportProgress(`Batch ${batchIndex + 1} tokens: ${result.usage.input_tokens} in / ${result.usage.output_tokens} out | Cost: $${batchCost.toFixed(4)}`);
+  reportProgress(`批次 ${batchIndex + 1} Token：输入 ${result.usage.input_tokens} / 输出 ${result.usage.output_tokens}，成本 $${batchCost.toFixed(4)}`);
 
   try {
     const cleanJson = result.text.replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -83,7 +83,7 @@ async function processExtractionBatch({
   } catch (error) {
     console.warn(`Failed to parse batch ${batchIndex + 1} JSON`, error);
     reportProgress(
-      `Warning: batch ${batchIndex + 1} parse failed, marking ${batch.length} indicators as not found.`
+      `警告：批次 ${batchIndex + 1} 解析失败，已将 ${batch.length} 个指标标记为未找到。`
     );
     return {
       batchIndex,
@@ -106,14 +106,14 @@ export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress,
   let totalOutputTokens = 0;
   let totalCost = 0;
 
-  reportProgress('Starting file processing...', 0);
-  reportProgress('Parsing requirements Excel...', 2);
+  reportProgress('开始处理文件...', 0);
+  reportProgress('正在解析需求 Excel...', 2);
 
   const requirements = (await parseExcel(csvFile)).map(normalizeRequirementRow);
   const selectedIndicatorTypes = getSelectedIndicatorTypes(settings.indicatorTypes);
 
   if (selectedIndicatorTypes.length === 0) {
-    throw new Error('Please select at least one indicator type to process.');
+    throw new Error('请至少选择一种要处理的指标类型。');
   }
 
   const selectedTypeSet = new Set(selectedIndicatorTypes);
@@ -122,11 +122,11 @@ export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress,
   ));
 
   if (filteredRequirements.length === 0) {
-    throw new Error(`No requirements match selected types: ${selectedIndicatorTypes.join(', ')}`);
+    throw new Error(`没有需求行匹配当前选择的指标类型：${selectedIndicatorTypes.join(', ')}`);
   }
 
   reportProgress(
-    `Loaded ${requirements.length} requirements, processing ${filteredRequirements.length} across ${selectedIndicatorTypes.join(', ')}`,
+    `已加载 ${requirements.length} 条需求，本次处理 ${filteredRequirements.length} 条，类型：${selectedIndicatorTypes.join(', ')}`,
     3
   );
 
@@ -135,29 +135,29 @@ export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress,
   let documentText = '';
 
   if (isGemini) {
-    reportProgress('Converting PDF for Gemini native extraction...', 5);
+    reportProgress('正在为 Gemini 原生提取准备 PDF...', 5);
     pdfBase64 = await fileToBase64(pdfFile);
-    reportProgress('Gemini preparation completed.', 10);
+    reportProgress('Gemini 输入准备完成。', 10);
   } else {
-    reportProgress('Parsing PDF document locally...', 5);
+    reportProgress('正在本地解析 PDF 文本...', 5);
     const pdfPagesData = await parsePDF(pdfFile, reportProgress);
     documentText = pdfPagesData.map((page) => `[Page ${page.pageNumber}]\n${page.text}`).join('\n\n');
-    reportProgress('Local parsing completed.', 10);
+    reportProgress('本地解析完成。', 10);
   }
 
-  reportProgress('Preparing AI extraction...', 12);
+  reportProgress('正在准备 AI 提取...', 12);
 
   const { allBatches, counts } = splitRequirementsIntoBatches(filteredRequirements, Number(settings.batchSize));
   const totalBatches = allBatches.length;
   const concurrentBatches = totalBatches > 0 ? Math.min(Number(settings.maxConcurrency), totalBatches) : 0;
 
   reportProgress(
-    `Split into ${totalBatches} batches with batch size ${settings.batchSize} (${counts.textCount} text, ${counts.numericCount} numeric, ${counts.intensityCount} intensity, ${counts.currencyCount} currency)`,
+    `已拆分为 ${totalBatches} 个批次，批次大小 ${settings.batchSize}（文字 ${counts.textCount}、数值 ${counts.numericCount}、强度 ${counts.intensityCount}、货币 ${counts.currencyCount}）`,
     13
   );
 
   if (concurrentBatches > 0) {
-    reportProgress(`Running up to ${concurrentBatches} requests in parallel...`, 14);
+    reportProgress(`最多并行运行 ${concurrentBatches} 个请求...`, 14);
   }
 
   const systemPrompts = {
@@ -198,7 +198,7 @@ export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress,
       } catch (error) {
         console.error(`Batch ${currentBatchIndex + 1} failed`, error);
         reportProgress(
-          `Batch ${currentBatchIndex + 1} failed after retries: ${error.message}. Marking ${batch.length} indicators as not found.`
+          `批次 ${currentBatchIndex + 1} 重试后仍失败：${error.message}。已将 ${batch.length} 个指标标记为未找到。`
         );
         processedBatch = {
           batchIndex: currentBatchIndex,
@@ -218,7 +218,7 @@ export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress,
       onPartialResults?.(finalResults);
 
       reportProgress(
-        `Completed ${completedBatches}/${totalBatches} batches...`,
+        `已完成 ${completedBatches}/${totalBatches} 个批次...`,
         15 + Math.round((completedBatches / totalBatches) * 80)
       );
     }
@@ -256,7 +256,7 @@ export async function runExtractionJob({ pdfFile, csvFile, settings, onProgress,
   };
 
   reportProgress(
-    `Extraction completed. Total: ${totalInputTokens + totalOutputTokens} tokens, Cost: $${totalCost.toFixed(4)}, Duration: ${duration}`,
+    `提取完成。总 Token：${totalInputTokens + totalOutputTokens}，成本 $${totalCost.toFixed(4)}，耗时 ${duration}`,
     100
   );
 
